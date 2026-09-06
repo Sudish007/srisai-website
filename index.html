@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sri Sai Hospital — Ayurvedic Care & Pharmacy</title>
+<meta name="description" content="Sri Sai Hospital — expert Ayurvedic & modern healthcare. Order medicines online, book appointments, live OPD queue.">
+<meta name="theme-color" content="#0a2647">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Announcement ticker (from admin settings) -->
+<div id="announceBar" class="announce" hidden></div>
+
+<!-- Glass nav -->
+<header class="nav">
+  <a class="brand" href="#top">
+    <span class="brandIcon">🌿</span>
+    <span id="brandName">Sri Sai Hospital</span>
+  </a>
+  <nav class="navLinks">
+    <a href="#pharmacy">Pharmacy</a>
+    <a href="#doctors">Doctors</a>
+    <a href="#services">Services</a>
+    <a href="#book">Book Visit</a>
+    <a href="#contact">Contact</a>
+  </nav>
+  <button id="ordersBtn" class="cartBtn" aria-label="My orders">📦</button>
+  <button id="authBtn" class="cartBtn" aria-label="Sign in">👤</button>
+  <button id="cartBtn" class="cartBtn" aria-label="Open cart">
+    🛒 <span id="cartCount" class="cartCount" hidden>0</span>
+  </button>
+  <button id="menuBtn" class="menuBtn" aria-label="Open menu">☰</button>
+</header>
+
+<!-- Mobile dropdown menu -->
+<nav id="mobileMenu" class="mobileMenu" hidden>
+  <a href="#pharmacy">🌿 Pharmacy</a>
+  <a href="#doctors">👨‍⚕️ Doctors</a>
+  <a href="#services">🩺 Services</a>
+  <a href="#book">📅 Book Visit</a>
+  <a href="#contact">📍 Contact</a>
+</nav>
+
+<!-- Hero -->
+<section class="hero" id="top">
+  <div class="blob blobA"></div>
+  <div class="blob blobB"></div>
+  <span class="floatLeaf l1">🌿</span>
+  <span class="floatLeaf l2">🍃</span>
+  <span class="floatLeaf l3">✨</span>
+  <div class="heroInner">
+    <p id="recognition" class="eyebrow light"></p>
+    <h1 id="tagline">Caring for Life, Healing with Heart</h1>
+    <p id="subTagline" class="subTagline"></p>
+    <div id="badges" class="badges"></div>
+    <div class="heroCtas">
+      <a href="#pharmacy" class="btn btnGold">🌿 Order Medicines</a>
+      <a href="#book" class="btn btnGhost">🩺 Book Appointment</a>
+    </div>
+    <p id="patientsNote" class="patientsNote"></p>
+  </div>
+  <svg class="heroWave" viewBox="0 0 1440 70" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0,40 C240,80 480,0 720,25 C960,50 1200,10 1440,45 L1440,70 L0,70 Z" fill="#ffffff"/>
+  </svg>
+</section>
+
+<!-- Stats -->
+<section id="stats" class="stats reveal"></section>
+
+<!-- Banner carousel (managed from the admin app) -->
+<section id="bannerWrap" class="bannerWrap reveal" hidden>
+  <div id="bannerTrack" class="bannerTrack"></div>
+  <div id="bannerDots" class="bannerDots"></div>
+</section>
+
+<!-- Live OPD queue -->
+<section class="section reveal" id="queueSection" hidden>
+  <p class="eyebrow">TODAY AT THE HOSPITAL</p>
+  <h2>Live OPD Queue <span class="livePill">● LIVE</span></h2>
+  <p class="sectionSub">Updated automatically — take a token in the Sri Sai Hospital app and walk in right on time.</p>
+  <div id="queueGrid" class="queueGrid"></div>
+</section>
+
+<!-- Pharmacy -->
+<section class="section reveal" id="pharmacy">
+  <p class="eyebrow">AYURVEDIC PHARMACY</p>
+  <h2>Authentic remedies, delivered</h2>
+  <p class="sectionSub" id="deliveryNote"></p>
+  <div class="shopBar">
+    <div class="searchWrap">
+      <span aria-hidden="true">🔍</span>
+      <input id="search" class="search" type="search" placeholder="Search medicines, herbs, remedies…" aria-label="Search medicines">
+    </div>
+  </div>
+  <div id="cats" class="cats"></div>
+  <div id="grid" class="grid">
+    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+  </div>
+</section>
+
+<!-- Doctors -->
+<section class="sectionFull alt" id="doctors">
+  <div class="section reveal">
+    <p class="eyebrow">OUR TEAM</p>
+    <h2>Doctors who listen first</h2>
+    <div id="docGrid" class="docGrid"></div>
+  </div>
+</section>
+
+<!-- Services -->
+<section class="section reveal" id="services">
+  <p class="eyebrow">WHAT WE OFFER</p>
+  <h2>Our Services</h2>
+  <div id="svcGrid" class="svcGrid"></div>
+</section>
+
+<!-- Booking -->
+<section class="sectionFull alt" id="book">
+  <div class="section reveal">
+    <p class="eyebrow">CONSULTATION</p>
+    <h2>Book an Appointment</h2>
+    <p class="sectionSub">Request a slot — the hospital confirms on WhatsApp within minutes.</p>
+    <div class="bookWrap">
+    <form id="bookForm" class="bookForm card3d">
+      <label>Doctor <select id="bDoctor" required></select></label>
+      <label>Service <select id="bService"></select></label>
+      <div class="row2">
+        <label>Type
+          <select id="bType">
+            <option value="offline">In-person visit</option>
+            <option value="online">Online video</option>
+          </select>
+        </label>
+        <label>Fee <input id="bFee" readonly value="—"></label>
+      </div>
+      <div class="row2">
+        <label>Date <input id="bDate" type="date" required></label>
+        <label>Time <select id="bTime" required></select></label>
+      </div>
+      <div class="row2">
+        <label>Patient name <input id="bName" required placeholder="Full name"></label>
+        <label>Phone <input id="bPhone" required inputmode="numeric" placeholder="10-digit mobile"></label>
+      </div>
+      <label>Health concern (optional) <input id="bNotes" placeholder="Short note for the doctor"></label>
+      <button class="btn btnGold big" type="submit">Request Booking on WhatsApp 💬</button>
+    </form>
+
+    <aside class="bookAside">
+      <div class="stepCard">
+        <h3>How it works</h3>
+        <div class="step"><span class="stepNo">1</span><div><b>Send your request</b><p>Pick a doctor, date and time — it opens in WhatsApp, just press send.</p></div></div>
+        <div class="step"><span class="stepNo">2</span><div><b>We confirm your slot</b><p>The hospital replies on WhatsApp with your confirmation.</p></div></div>
+        <div class="step"><span class="stepNo">3</span><div><b>Visit or video call</b><p>Walk in at your time, or receive the video consultation link.</p></div></div>
+      </div>
+      <div class="stepCard feeCard">
+        <h3>Consultation fees</h3>
+        <div class="feeRow"><span>🏥 In-person visit</span><b id="aFeeOff">—</b></div>
+        <div class="feeRow"><span>📹 Online video</span><b id="aFeeOn">—</b></div>
+        <p class="tiny" style="margin-top:8px">Prefer to talk? Call us directly:</p>
+        <a id="aPhone" class="asideCall" href="#">📞 —</a>
+      </div>
+    </aside>
+    </div>
+  </div>
+</section>
+
+<!-- Contact -->
+<section class="section reveal" id="contact">
+  <p class="eyebrow">VISIT US</p>
+  <h2>Reach Us</h2>
+  <div class="contactGrid">
+    <div class="contactCard"><span class="cIcon">📍</span><h3>Address</h3><p id="cAddress"></p></div>
+    <div class="contactCard"><span class="cIcon">📞</span><h3>Phone</h3><p><a id="cPhone" href="#"></a></p></div>
+    <div class="contactCard"><span class="cIcon">💬</span><h3>WhatsApp</h3><p><a id="cWa" href="#" target="_blank" rel="noopener">Chat with us</a></p></div>
+    <div class="contactCard"><span class="cIcon">✉️</span><h3>Email</h3><p><a id="cEmail" href="#"></a></p></div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="footInner">
+    <div>
+      <p id="footName" class="footBrand">Sri Sai Hospital</p>
+      <p id="footTagline" class="footTag"></p>
+    </div>
+    <div class="footLinks">
+      <a href="#pharmacy">Pharmacy</a>
+      <a href="#doctors">Doctors</a>
+      <a href="#book">Book Visit</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="terms.html">Terms of Service</a>
+    </div>
+  </div>
+  <p class="tiny footNote">Ayurvedic wellness products — consult our doctors for personalised guidance.</p>
+</footer>
+
+<!-- Floating WhatsApp -->
+<a id="waFab" class="waFab" href="#" target="_blank" rel="noopener" aria-label="Chat on WhatsApp">💬</a>
+
+<!-- App-style bottom nav (mobile only) -->
+<nav class="bottomNav" aria-label="Quick navigation">
+  <a href="#pharmacy"><span>🌿</span>Pharmacy</a>
+  <a href="#book"><span>📅</span>Book</a>
+  <a id="mCall" href="#"><span>📞</span>Call</a>
+  <button id="mCart" type="button"><span>🛒</span>Cart<b id="mCartCount" class="mBadge" hidden>0</b></button>
+</nav>
+
+<!-- Cart drawer -->
+<div id="overlay" class="overlay" hidden></div>
+<aside id="drawer" class="drawer" hidden aria-label="Shopping cart">
+  <div class="drawerHead">
+    <h3>My Cart</h3>
+    <button id="closeDrawer" class="iconBtn" aria-label="Close cart">✕</button>
+  </div>
+  <div id="freeBar" class="freeBar" hidden></div>
+  <div id="cartLines" class="cartLines"></div>
+
+  <div id="couponBox" class="couponBox" hidden>
+    <input id="couponInput" placeholder="Coupon code (e.g. WELCOME10)" autocapitalize="characters">
+    <button id="couponApply" class="miniBtn" type="button">Apply</button>
+  </div>
+  <p id="couponMsg" class="couponMsg" hidden></p>
+
+  <div id="cartBill" class="cartBill"></div>
+
+  <form id="orderForm" class="orderForm">
+    <input id="oName" required placeholder="Your name">
+    <input id="oPhone" required inputmode="numeric" maxlength="10" placeholder="10-digit mobile number">
+    <textarea id="oAddress" required placeholder="House no., street, landmark"></textarea>
+    <div class="orow2">
+      <input id="oCity" required placeholder="City">
+      <input id="oPincode" required inputmode="numeric" maxlength="6" placeholder="Pincode">
+    </div>
+    <div id="payOpts" class="payOpts"></div>
+    <button id="placeBtn" class="btn btnGold big" type="submit">Place Order</button>
+    <p class="tiny center">Prices, stock and delivery are verified by the hospital's system — same as the app.</p>
+  </form>
+
+  <div id="orderDone" class="orderDone" hidden></div>
+</aside>
+
+<!-- Auth modal -->
+<div id="authOverlay" class="overlay" hidden></div>
+<div id="authModal" class="modal" hidden>
+  <div class="modalHead">
+    <h3 id="authTitle">Sign in</h3>
+    <button id="authClose" class="iconBtn" aria-label="Close">✕</button>
+  </div>
+  <div id="authBody"></div>
+</div>
+
+<!-- Orders modal -->
+<div id="ordersOverlay" class="overlay" hidden></div>
+<div id="ordersModal" class="modal" hidden>
+  <div class="modalHead">
+    <h3>My Orders</h3>
+    <button id="ordersClose" class="iconBtn" aria-label="Close">✕</button>
+  </div>
+  <div id="ordersBody"></div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
