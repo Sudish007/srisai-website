@@ -713,8 +713,19 @@ function renderAuth() {
         <p class="tiny" style="margin-top:4px">Same account works in the Sri Sai Hospital app.</p>
       </div>
       <button class="btn btnGold big" id="auOrders" style="margin-top:12px">📦 My Orders</button>
+      <input id="auNewPass" class="authField" type="password" placeholder="Set / change password (min 6 chars)">
+      <button class="gBtn" id="auSetPass" style="margin-top:10px">🔑 Save Password</button>
+      <p class="authNote">With a password you can also sign in without waiting for an email code.</p>
       <button class="linkBtn" id="auOut">Sign out</button>`;
     $('auOrders').addEventListener('click', () => { closeAuth(); openOrders(); });
+    $('auSetPass').addEventListener('click', async () => {
+      const pw = $('auNewPass').value;
+      if (pw.length < 6) return alert('Password must be at least 6 characters.');
+      const { error } = await db.auth.updateUser({ password: pw });
+      if (error) return alert(error.message);
+      $('auNewPass').value = '';
+      alert('Password saved ✅ — you can now sign in with email + password.');
+    });
     $('auOut').addEventListener('click', async () => { await db.auth.signOut(); renderAuth(); });
     return;
   }
