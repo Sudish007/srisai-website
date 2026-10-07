@@ -743,10 +743,10 @@ body.legal-page { padding-bottom: 0; }
   .stats.bento { grid-template-columns: repeat(2, 1fr); }
   /* touch targets >= 44px on mobile (spec F / E5) */
   .btn.sm { min-height: var(--tap); }
-  .seg-btn { min-height: 38px; } /* + 3px seg padding ×2 = 44px track */
+  .seg-btn { min-height: var(--tap); }
   /* keep the language toggle in the header on phones; theme toggle lives in ☰ menu */
   #themeBtn { display: none; }
-  .hdr .seg-lang .seg-btn { padding: 0 8px; min-width: 40px; }
+  .hdr .seg-lang .seg-btn { padding: 0 6px; min-width: var(--tap); }
   .hdr-in { gap: var(--sp-2); }
   .hdr-actions { gap: 2px; }
   #accountBtn { display: none; }
@@ -757,6 +757,10 @@ body.legal-page { padding-bottom: 0; }
   .confirm-actions { grid-template-columns: 1fr 1fr; }
   .bsec { padding-left: 0; }
   .tstats { padding: var(--sp-3); gap: 6px; }
+}
+@media (max-width: 399.98px) {
+  /* 44px language radios + cart + menu leave no room for the wordmark; brand mark stays as the home link */
+  #brandName { display: none; }
 }
 @media (min-width: 720px) {
   body { padding-bottom: 0; }
