@@ -295,9 +295,12 @@ function renderChrome() {
     const tel = telHref(s.phone);
     $('quickCall').href = tel;
     $('menuCall').href = tel;
-    $('quickWa').href = waHref();
-    $('menuWa').href = waHref();
-    $('waFab').href = waHref(`Hello ${name} 🙏`);
+    // target=_blank only once the href is a real wa.me link (until then a tap stays in-page at #contact)
+    for (const [id, href] of [['quickWa', waHref()], ['menuWa', waHref()], ['waFab', waHref(t('home.waGreeting', { name }))]]) {
+      const el = $(id);
+      el.href = href;
+      el.target = '_blank';
+    }
   }
 }
 
@@ -1151,14 +1154,18 @@ export function payUpi(order) {
 }
 
 export async function openRazorpay(order, btn) {
+  // Open the tab synchronously inside the click's user activation (popup blockers drop
+  // window.open after an await), then point it at the payment link once we have it.
+  const win = window.open('about:blank', '_blank');
+  if (win) win.opener = null;
   btn?.setAttribute('aria-busy', 'true');
   ui.toast(t('pay.opening'), 'info', 2000);
   const { data, error } = await safe(db.functions.invoke('create-payment-link', {
     body: { orderNumber: order.orderNumber, customerName: order.name, phone: order.phone },
   }));
   btn?.removeAttribute('aria-busy');
-  if (error || !data?.url) { ui.toast(t('pay.razorpayFailed'), 'err'); return; }
-  ui.openExternal(data.url);
+  if (error || !data?.url) { win?.close(); ui.toast(t('pay.razorpayFailed'), 'err'); return; }
+  if (win) win.location.href = data.url; else location.href = data.url;
 }
 
 export function sendOrderWhatsApp(order, extra = '') {
