@@ -2,266 +2,368 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sri Sai Hospital — Ayurvedic Care & Pharmacy</title>
-<meta name="description" content="Sri Sai Hospital — expert Ayurvedic & modern healthcare. Order medicines online, book appointments, live OPD queue.">
+<meta name="description" content="Sri Sai Hospital — order Ayurvedic medicines, book doctors, live OPD queue tokens. English · हिन्दी · भोजपुरी">
 <meta name="theme-color" content="#0a2647">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Sri Sai Hospital — Ayurvedic Care & Pharmacy">
+<meta property="og:description" content="Order medicines, book doctors, live OPD queue">
+<meta property="og:site_name" content="Sri Sai Hospital">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2300b894'/%3E%3Cstop offset='1' stop-color='%2300cec9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='14' fill='url(%23g)'/%3E%3Cpath d='M13 33c0-10 7-17 18-18-1 11-8 18-18 18z' fill='%23fff'/%3E%3Cpath d='M14 32c3-6 8-11 14-14' stroke='%2300997b' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3Cpath d='M33 12v9M28.5 16.5h9' stroke='%23fff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<!-- Announcement ticker (from admin settings) -->
-<div id="announceBar" class="announce" hidden></div>
+<a class="skip" href="#main" id="skipLink" data-i18n="a11y.skipToContent">Skip to content</a>
 
-<!-- Glass nav -->
-<header class="nav">
-  <a class="brand" href="#top">
-    <span class="brandIcon">🌿</span>
-    <span id="brandName">Sri Sai Hospital</span>
-  </a>
-  <nav class="navLinks">
-    <a href="#pharmacy">Pharmacy</a>
-    <a href="#doctors">Doctors</a>
-    <a href="#services">Services</a>
-    <a href="#book">Book Visit</a>
-    <a href="#contact">Contact</a>
-  </nav>
-  <button id="ordersBtn" class="cartBtn" aria-label="My orders">📦</button>
-  <button id="authBtn" class="cartBtn" aria-label="Sign in">👤</button>
-  <button id="cartBtn" class="cartBtn" aria-label="Open cart">
-    🛒 <span id="cartCount" class="cartCount" hidden>0</span>
-  </button>
-  <button id="menuBtn" class="menuBtn" aria-label="Open menu">☰</button>
+<!-- Announcement ticker (settings.announcement) -->
+<div class="ticker" id="ticker" hidden role="region" data-i18n-aria="a11y.announcement">
+  <div class="ticker-inner" id="tickerText"></div>
+</div>
+
+<!-- Glass header -->
+<header class="hdr" id="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="#home">
+      <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <defs><linearGradient id="bm1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00b894"/><stop offset="1" stop-color="#00cec9"/></linearGradient></defs>
+        <rect width="48" height="48" rx="14" fill="url(#bm1)"/>
+        <path d="M13 33c0-10 7-17 18-18-1 11-8 18-18 18z" fill="#fff"/>
+        <path d="M14 32c3-6 8-11 14-14" stroke="#00997b" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+        <path d="M33 12v9M28.5 16.5h9" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <span id="brandName">Sri Sai Hospital</span>
+    </a>
+    <nav class="hdr-nav" data-i18n-aria="a11y.mainNav">
+      <a href="#home" data-i18n="nav.home">Home</a>
+      <a href="#pharmacy" data-i18n="nav.pharmacy">Pharmacy</a>
+      <a href="#book" data-i18n="nav.book">Book</a>
+      <a href="#token" data-i18n="nav.token">Token</a>
+      <a href="#orders" data-i18n="nav.orders">Orders</a>
+    </nav>
+    <div class="hdr-actions">
+      <div class="seg seg-lang" role="radiogroup" data-i18n-aria="a11y.langSwitch">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="en" data-i18n="lang.en">EN</button>
+        <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="hi" data-i18n="lang.hi">हिं</button>
+        <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="bho" data-i18n="lang.bho">भो</button>
+      </div>
+      <button type="button" class="icon-btn" id="themeBtn" data-theme-toggle data-i18n-aria="a11y.themeSwitch"><span class="ico" aria-hidden="true">🌙</span></button>
+      <button type="button" class="icon-btn" id="accountBtn" data-i18n-aria="a11y.account"><span class="ico" aria-hidden="true">👤</span><span class="dot" id="accountDot" hidden></span></button>
+      <button type="button" class="icon-btn" id="cartBtn" data-i18n-aria="a11y.openCart"><span class="ico" aria-hidden="true">🛒</span><span class="badge" id="cartCount" hidden>0</span></button>
+      <button type="button" class="icon-btn" id="menuBtn" data-i18n-aria="a11y.openMenu"><span class="ico" aria-hidden="true">☰</span></button>
+    </div>
+  </div>
 </header>
 
-<!-- Mobile dropdown menu -->
-<nav id="mobileMenu" class="mobileMenu" hidden>
-  <a href="#pharmacy">🌿 Pharmacy</a>
-  <a href="#doctors">👨‍⚕️ Doctors</a>
-  <a href="#services">🩺 Services</a>
-  <a href="#book">📅 Book Visit</a>
-  <a href="#contact">📍 Contact</a>
-</nav>
+<main id="main" tabindex="-1">
 
-<!-- Hero -->
-<section class="hero" id="top">
-  <div class="blob blobA"></div>
-  <div class="blob blobB"></div>
-  <span class="floatLeaf l1">🌿</span>
-  <span class="floatLeaf l2">🍃</span>
-  <span class="floatLeaf l3">✨</span>
-  <div class="heroInner">
-    <p id="recognition" class="eyebrow light"></p>
-    <h1 id="tagline">Caring for Life, Healing with Heart</h1>
-    <p id="subTagline" class="subTagline"></p>
-    <div id="badges" class="badges"></div>
-    <div class="heroCtas">
-      <a href="#pharmacy" class="btn btnGold">🌿 Order Medicines</a>
-      <a href="#book" class="btn btnGhost">🩺 Book Appointment</a>
-    </div>
-    <p id="patientsNote" class="patientsNote"></p>
-  </div>
-  <svg class="heroWave" viewBox="0 0 1440 70" preserveAspectRatio="none" aria-hidden="true">
-    <path d="M0,40 C240,80 480,0 720,25 C960,50 1200,10 1440,45 L1440,70 L0,70 Z" fill="#ffffff"/>
-  </svg>
-</section>
-
-<!-- Stats -->
-<section id="stats" class="stats reveal"></section>
-
-<!-- Banner carousel (managed from the admin app) -->
-<section id="bannerWrap" class="bannerWrap reveal" hidden>
-  <div id="bannerTrack" class="bannerTrack"></div>
-  <div id="bannerDots" class="bannerDots"></div>
-</section>
-
-<!-- Live OPD queue -->
-<section class="section reveal" id="queueSection" hidden>
-  <p class="eyebrow">TODAY AT THE HOSPITAL</p>
-  <h2>Live OPD Queue <span class="livePill">● LIVE</span></h2>
-  <p class="sectionSub">Updated automatically — take a token in the Sri Sai Hospital app and walk in right on time.</p>
-  <div id="queueGrid" class="queueGrid"></div>
-</section>
-
-<!-- Pharmacy -->
-<section class="section reveal" id="pharmacy">
-  <p class="eyebrow">AYURVEDIC PHARMACY</p>
-  <h2>Authentic remedies, delivered</h2>
-  <p class="sectionSub" id="deliveryNote"></p>
-  <div class="shopBar">
-    <div class="searchWrap">
-      <span aria-hidden="true">🔍</span>
-      <input id="search" class="search" type="search" placeholder="Search medicines, herbs, remedies…" aria-label="Search medicines">
-    </div>
-  </div>
-  <div id="cats" class="cats"></div>
-  <div id="grid" class="grid">
-    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
-  </div>
-</section>
-
-<!-- Doctors -->
-<section class="sectionFull alt" id="doctors">
-  <div class="section reveal">
-    <p class="eyebrow">OUR TEAM</p>
-    <h2>Doctors who listen first</h2>
-    <div id="docGrid" class="docGrid"></div>
-  </div>
-</section>
-
-<!-- Services -->
-<section class="section reveal" id="services">
-  <p class="eyebrow">WHAT WE OFFER</p>
-  <h2>Our Services</h2>
-  <div id="svcGrid" class="svcGrid"></div>
-</section>
-
-<!-- Booking -->
-<section class="sectionFull alt" id="book">
-  <div class="section reveal">
-    <p class="eyebrow">CONSULTATION</p>
-    <h2>Book an Appointment</h2>
-    <p class="sectionSub">Request a slot — the hospital confirms on WhatsApp within minutes.</p>
-    <div class="bookWrap">
-    <form id="bookForm" class="bookForm card3d">
-      <label>Doctor <select id="bDoctor" required></select></label>
-      <label>Service <select id="bService"></select></label>
-      <div class="row2">
-        <label>Type
-          <select id="bType">
-            <option value="offline">In-person visit</option>
-            <option value="online">Online video</option>
-          </select>
-        </label>
-        <label>Fee <input id="bFee" readonly value="—"></label>
+  <!-- ================= HOME ================= -->
+  <section class="screen" data-screen="home">
+    <section class="hero">
+      <div class="blob blob-a"></div>
+      <div class="blob blob-b"></div>
+      <div class="wrap hero-in">
+        <p class="eyebrow" id="recognition"></p>
+        <h1 id="tagline"></h1>
+        <p class="sub" id="subTagline"></p>
+        <div class="badges" id="badges"></div>
+        <div class="hero-ctas">
+          <a class="btn btn-gold" href="#pharmacy"><span class="ico" aria-hidden="true">💊</span><span class="lbl" data-i18n="home.orderMedicines">Order medicines</span></a>
+          <a class="btn btn-ghost on-dark" href="#book"><span class="ico" aria-hidden="true">🩺</span><span class="lbl" data-i18n="home.bookDoctor">Book doctor</span></a>
+        </div>
+        <p class="note" id="patientsNote"></p>
       </div>
-      <div class="row2">
-        <label>Date <input id="bDate" type="date" required></label>
-        <label>Time <select id="bTime" required></select></label>
-      </div>
-      <div class="row2">
-        <label>Patient name <input id="bName" required placeholder="Full name"></label>
-        <label>Phone <input id="bPhone" required inputmode="numeric" placeholder="10-digit mobile"></label>
-      </div>
-      <label>Health concern (optional) <input id="bNotes" placeholder="Short note for the doctor"></label>
-      <button class="btn btnGold big" type="submit">Request Booking on WhatsApp 💬</button>
-    </form>
+      <svg class="hero-wave" viewBox="0 0 1440 70" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        <path d="M0,40 C240,80 480,0 720,25 C960,50 1200,10 1440,45 L1440,70 L0,70 Z"/>
+      </svg>
+    </section>
 
-    <aside class="bookAside">
-      <div class="stepCard">
-        <h3>How it works</h3>
-        <div class="step"><span class="stepNo">1</span><div><b>Send your request</b><p>Pick a doctor, date and time — it opens in WhatsApp, just press send.</p></div></div>
-        <div class="step"><span class="stepNo">2</span><div><b>We confirm your slot</b><p>The hospital replies on WhatsApp with your confirmation.</p></div></div>
-        <div class="step"><span class="stepNo">3</span><div><b>Visit or video call</b><p>Walk in at your time, or receive the video consultation link.</p></div></div>
+    <div class="wrap">
+      <!-- Quick actions -->
+      <section class="bento quick" id="quick" data-i18n-aria="home.quickActions">
+        <a class="card lift tile accent span-2" href="#pharmacy"><span class="ico" aria-hidden="true">💊</span><b data-i18n="home.orderMedicines">Order medicines</b></a>
+        <a class="card lift tile navy span-2" href="#book"><span class="ico" aria-hidden="true">📅</span><b data-i18n="home.bookDoctor">Book doctor</b></a>
+        <a class="card lift tile gold span-2" href="#token"><span class="ico" aria-hidden="true">🎫</span><b data-i18n="home.queueToken">Queue token</b></a>
+        <a class="card lift tile span-3" id="quickCall" href="#contact"><span class="ico" aria-hidden="true">📞</span><b data-i18n="home.call">Call</b></a>
+        <a class="card lift tile wa span-3 wide" id="quickWa" href="#contact" target="_blank" rel="noopener"><span class="ico" aria-hidden="true">💬</span><b data-i18n="home.whatsapp">WhatsApp</b></a>
+      </section>
+
+      <!-- Banner carousel -->
+      <section class="sec reveal" id="offers" hidden>
+        <div class="sec-head"><div><p class="eyebrow" data-i18n="home.offers">Offers</p></div></div>
+        <div class="carousel" id="carousel" data-i18n-aria="a11y.carousel" role="region">
+          <div class="car-track" id="carTrack"></div>
+          <div class="car-dots" id="carDots"></div>
+        </div>
+      </section>
+
+      <!-- Stats -->
+      <section class="sec reveal" id="statsSec">
+        <div class="sec-head"><div><p class="eyebrow" data-i18n="home.glance">At a glance</p></div></div>
+        <div class="bento stats" id="stats"></div>
+      </section>
+
+      <!-- Live OPD queue widget -->
+      <section class="sec reveal" id="queueWidget" hidden>
+        <div class="sec-head">
+          <div>
+            <h2><span data-i18n="home.liveQueue">Live OPD queue</span> <span class="pill pill-live" data-i18n="common.live">LIVE</span></h2>
+            <p data-i18n="home.liveQueueSub">Now serving per doctor — updated live</p>
+          </div>
+        </div>
+        <div class="qgrid" id="queueGrid"></div>
+      </section>
+
+      <!-- Doctors -->
+      <section class="sec reveal" id="doctors">
+        <div class="sec-head">
+          <div>
+            <h2 data-i18n="home.doctors">Our doctors</h2>
+            <p data-i18n="home.doctorsSub">Doctors who listen first</p>
+          </div>
+        </div>
+        <div class="dgrid" id="docGrid"></div>
+      </section>
+
+      <!-- Services -->
+      <section class="sec reveal" id="services">
+        <div class="sec-head"><div><h2 data-i18n="home.services">Our services</h2></div></div>
+        <div class="sgrid" id="svcGrid"></div>
+      </section>
+
+      <!-- Contact -->
+      <section class="sec reveal" id="contact">
+        <div class="sec-head"><div><h2 data-i18n="home.contact">Reach us</h2></div></div>
+        <div class="bento contact" id="contactGrid"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ================= PHARMACY ================= -->
+  <section class="screen" data-screen="pharmacy">
+    <div class="wrap">
+      <div class="screen-head">
+        <h1 data-i18n="shop.title">Pharmacy</h1>
+        <p data-i18n="shop.sub">Authentic remedies, delivered</p>
       </div>
-      <div class="stepCard feeCard">
-        <h3>Consultation fees</h3>
-        <div class="feeRow"><span>🏥 In-person visit</span><b id="aFeeOff">—</b></div>
-        <div class="feeRow"><span>📹 Online video</span><b id="aFeeOn">—</b></div>
-        <p class="tiny" style="margin-top:8px">Prefer to talk? Call us directly:</p>
-        <a id="aPhone" class="asideCall" href="#">📞 —</a>
+      <div class="search">
+        <span class="ico" aria-hidden="true">🔍</span>
+        <input id="search" type="search" autocomplete="off" data-i18n-placeholder="shop.searchPlaceholder" data-i18n-aria="shop.searchAria">
+        <button type="button" class="icon-btn clear" id="searchClear" data-i18n-aria="a11y.clearSearch" hidden><span class="ico" aria-hidden="true">✕</span></button>
       </div>
-    </aside>
+      <div class="chips" id="cats" style="margin-top:12px"></div>
+      <p class="muted" id="deliveryNote" style="font-size:var(--fs-sm);min-height:1.5em"></p>
+      <div class="pgrid" id="grid"></div>
+      <div class="cartbar" id="cartbar" hidden></div>
+    </div>
+  </section>
+
+  <!-- ================= BOOK ================= -->
+  <section class="screen" data-screen="book">
+    <div class="wrap">
+      <div class="screen-head">
+        <h1 data-i18n="book.title">Book appointment</h1>
+        <p data-i18n="book.sub">Confirmed on WhatsApp within minutes</p>
+      </div>
+      <div id="bookForm"></div>
+      <div id="bookHow"></div>
+      <section class="sec" id="myApptsSec">
+        <div class="sec-head"><div><h2 data-i18n="book.my">My appointments</h2></div></div>
+        <div id="myAppts"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ================= TOKEN ================= -->
+  <section class="screen" data-screen="token">
+    <div class="wrap">
+      <div class="screen-head">
+        <h1 data-i18n="token.title">Queue token</h1>
+        <p data-i18n="token.sub">Skip the reception line</p>
+      </div>
+      <div id="tokenLive"></div>
+      <div id="tokenForm"></div>
+    </div>
+  </section>
+
+  <!-- ================= ORDERS ================= -->
+  <section class="screen" data-screen="orders">
+    <div class="wrap">
+      <div class="screen-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <h1 data-i18n="orders.title">My orders</h1>
+          <p id="ordersSync" style="min-height:1.5em"></p>
+        </div>
+        <div class="seg" id="ordersFilter" role="radiogroup">
+          <span class="seg-thumb" aria-hidden="true"></span>
+          <button type="button" class="seg-btn" role="radio" aria-checked="true" data-filter="all" data-i18n="orders.filterAll">All</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-filter="active" data-i18n="orders.filterActive">Active</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-filter="past" data-i18n="orders.filterPast">Past</button>
+        </div>
+      </div>
+      <div id="ordersList"></div>
+    </div>
+  </section>
+</main>
+
+<!-- Footer -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <div class="foot-brand">
+          <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false" style="width:34px;height:34px">
+            <defs><linearGradient id="bm2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00b894"/><stop offset="1" stop-color="#00cec9"/></linearGradient></defs>
+            <rect width="48" height="48" rx="14" fill="url(#bm2)"/>
+            <path d="M13 33c0-10 7-17 18-18-1 11-8 18-18 18z" fill="#fff"/>
+            <path d="M14 32c3-6 8-11 14-14" stroke="#00997b" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+            <path d="M33 12v9M28.5 16.5h9" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          <span id="footName">Sri Sai Hospital</span>
+        </div>
+        <p class="foot-tag" id="footTagline"></p>
+        <p class="foot-tag" data-i18n="footer.sameAsApp">Same account & orders as the app</p>
+      </div>
+      <div>
+        <h4 data-i18n="footer.links">Links</h4>
+        <div class="foot-links">
+          <a href="#pharmacy" data-i18n="nav.pharmacy">Pharmacy</a>
+          <a href="#book" data-i18n="nav.book">Book</a>
+          <a href="#token" data-i18n="nav.token">Token</a>
+          <a href="#orders" data-i18n="nav.orders">Orders</a>
+        </div>
+      </div>
+      <div>
+        <h4 data-i18n="menu.legal">Legal</h4>
+        <div class="foot-links">
+          <a href="privacy.html" data-i18n="footer.privacy">Privacy Policy</a>
+          <a href="terms.html" data-i18n="footer.terms">Terms of Service</a>
+        </div>
+        <h4 style="margin-top:20px" data-i18n="lang.label">Language</h4>
+        <div class="seg seg-lang" role="radiogroup" data-i18n-aria="a11y.langSwitch">
+          <span class="seg-thumb" aria-hidden="true"></span>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="en" data-i18n="lang.en">EN</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="hi" data-i18n="lang.hi">हिं</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="bho" data-i18n="lang.bho">भो</button>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span id="footRights"></span>
+      <span data-i18n="footer.note">Consult our doctors for personal guidance.</span>
     </div>
   </div>
-</section>
-
-<!-- Contact -->
-<section class="section reveal" id="contact">
-  <p class="eyebrow">VISIT US</p>
-  <h2>Reach Us</h2>
-  <div class="contactGrid">
-    <div class="contactCard"><span class="cIcon">📍</span><h3>Address</h3><p id="cAddress"></p></div>
-    <div class="contactCard"><span class="cIcon">📞</span><h3>Phone</h3><p><a id="cPhone" href="#"></a></p></div>
-    <div class="contactCard"><span class="cIcon">💬</span><h3>WhatsApp</h3><p><a id="cWa" href="#" target="_blank" rel="noopener">Chat with us</a></p></div>
-    <div class="contactCard"><span class="cIcon">✉️</span><h3>Email</h3><p><a id="cEmail" href="#"></a></p></div>
-  </div>
-</section>
-
-<footer class="footer">
-  <div class="footInner">
-    <div>
-      <p id="footName" class="footBrand">Sri Sai Hospital</p>
-      <p id="footTagline" class="footTag"></p>
-    </div>
-    <div class="footLinks">
-      <a href="#pharmacy">Pharmacy</a>
-      <a href="#doctors">Doctors</a>
-      <a href="#book">Book Visit</a>
-      <a href="privacy.html">Privacy Policy</a>
-      <a href="terms.html">Terms of Service</a>
-    </div>
-  </div>
-  <p class="tiny footNote">Ayurvedic wellness products — consult our doctors for personalised guidance.</p>
 </footer>
 
-<!-- Floating WhatsApp -->
-<a id="waFab" class="waFab" href="#" target="_blank" rel="noopener" aria-label="Chat on WhatsApp">💬</a>
+<!-- WhatsApp FAB -->
+<a class="fab" id="waFab" href="#contact" target="_blank" rel="noopener" data-i18n-aria="a11y.whatsappFab"><span class="ico" aria-hidden="true">💬</span></a>
 
-<!-- App-style bottom nav (mobile only) -->
-<nav class="bottomNav" aria-label="Quick navigation">
-  <a href="#pharmacy"><span>🌿</span>Pharmacy</a>
-  <a href="#book"><span>📅</span>Book</a>
-  <a id="mCall" href="#"><span>📞</span>Call</a>
-  <button id="mCart" type="button"><span>🛒</span>Cart<b id="mCartCount" class="mBadge" hidden>0</b></button>
+<!-- Mobile bottom bar -->
+<nav class="bottombar" data-i18n-aria="a11y.bottomNav">
+  <a class="bb-item" href="#home"><span class="bb-ico" aria-hidden="true">🏠</span><span class="bb-lbl" data-i18n="nav.home">Home</span></a>
+  <a class="bb-item" href="#pharmacy"><span class="bb-ico" aria-hidden="true">💊</span><span class="bb-lbl" data-i18n="nav.pharmacy">Pharmacy</span></a>
+  <a class="bb-item" href="#book"><span class="bb-ico" aria-hidden="true">📅</span><span class="bb-lbl" data-i18n="nav.book">Book</span></a>
+  <a class="bb-item" href="#token"><span class="bb-ico" aria-hidden="true">🎫</span><span class="bb-lbl" data-i18n="nav.token">Token</span></a>
+  <button type="button" class="bb-item" id="cartBtnBar"><span class="bb-ico" aria-hidden="true">🛒</span><span class="bb-lbl" data-i18n="nav.cart">Cart</span><span class="badge" id="cartCountBar" hidden>0</span></button>
 </nav>
 
-<!-- Cart drawer -->
-<div id="overlay" class="overlay" hidden></div>
-<aside id="drawer" class="drawer" hidden aria-label="Shopping cart">
-  <div class="drawerHead">
-    <h3>My Cart</h3>
-    <button id="closeDrawer" class="iconBtn" aria-label="Close cart">✕</button>
+<!-- Overlay + sheets -->
+<div class="overlay" id="overlay" hidden></div>
+
+<div class="sheet" id="sheetCart" role="dialog" aria-modal="true" aria-labelledby="sheetCartTitle" hidden tabindex="-1">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head">
+    <h2 class="sheet-title" id="sheetCartTitle" data-i18n="cart.title">My cart</h2>
+    <button type="button" class="icon-btn sheet-close" data-i18n-aria="a11y.close"><span class="ico" aria-hidden="true">✕</span></button>
   </div>
-  <div id="freeBar" class="freeBar" hidden></div>
-  <div id="cartLines" class="cartLines"></div>
+  <div class="sheet-body" id="cartBody"></div>
+  <div class="sheet-foot" id="cartFoot" hidden></div>
+</div>
 
-  <div id="couponBox" class="couponBox" hidden>
-    <input id="couponInput" placeholder="Coupon code (e.g. WELCOME10)" autocapitalize="characters">
-    <button id="couponApply" class="miniBtn" type="button">Apply</button>
+<div class="sheet" id="sheetProduct" role="dialog" aria-modal="true" aria-labelledby="sheetProductTitle" hidden tabindex="-1">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head">
+    <h2 class="sheet-title" id="sheetProductTitle" data-i18n="shop.details">Details</h2>
+    <button type="button" class="icon-btn sheet-close" data-i18n-aria="a11y.close"><span class="ico" aria-hidden="true">✕</span></button>
   </div>
-  <p id="couponMsg" class="couponMsg" hidden></p>
+  <div class="sheet-body" id="productBody"></div>
+  <div class="sheet-foot" id="productFoot" hidden></div>
+</div>
 
-  <div id="cartBill" class="cartBill"></div>
+<div class="sheet" id="sheetAccount" role="dialog" aria-modal="true" aria-labelledby="sheetAccountTitle" hidden tabindex="-1">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head">
+    <h2 class="sheet-title" id="sheetAccountTitle" data-i18n="auth.title">Sign in</h2>
+    <button type="button" class="icon-btn sheet-close" data-i18n-aria="a11y.close"><span class="ico" aria-hidden="true">✕</span></button>
+  </div>
+  <div class="sheet-body" id="accountBody"></div>
+</div>
 
-  <form id="orderForm" class="orderForm">
-    <input id="oName" required placeholder="Your name">
-    <input id="oPhone" required inputmode="numeric" maxlength="10" placeholder="10-digit mobile number">
-    <textarea id="oAddress" required placeholder="House no., street, landmark"></textarea>
-    <div class="orow2">
-      <input id="oCity" required placeholder="City">
-      <input id="oPincode" required inputmode="numeric" maxlength="6" placeholder="Pincode">
+<div class="sheet" id="sheetMenu" role="dialog" aria-modal="true" aria-labelledby="sheetMenuTitle" hidden tabindex="-1">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head">
+    <h2 class="sheet-title" id="sheetMenuTitle" data-i18n="menu.title">Menu</h2>
+    <button type="button" class="icon-btn sheet-close" data-i18n-aria="a11y.close"><span class="ico" aria-hidden="true">✕</span></button>
+  </div>
+  <div class="sheet-body">
+    <div class="menu-list">
+      <a class="menu-item" href="#orders" data-close-sheet><span class="ico" aria-hidden="true">📦</span><span data-i18n="nav.orders">Orders</span><span class="chev" aria-hidden="true">›</span></a>
+      <button type="button" class="menu-item" id="menuAccount"><span class="ico" aria-hidden="true">👤</span><span data-i18n="nav.account">Account</span><span class="chev" aria-hidden="true">›</span></button>
     </div>
-    <div id="payOpts" class="payOpts"></div>
-    <button id="placeBtn" class="btn btnGold big" type="submit">Place Order</button>
-    <p class="tiny center">Prices, stock and delivery are verified by the hospital's system — same as the app.</p>
-  </form>
-
-  <div id="orderDone" class="orderDone" hidden></div>
-</aside>
-
-<!-- Auth modal -->
-<div id="authOverlay" class="overlay" hidden></div>
-<div id="authModal" class="modal" hidden>
-  <div class="modalHead">
-    <h3 id="authTitle">Sign in</h3>
-    <button id="authClose" class="iconBtn" aria-label="Close">✕</button>
+    <p class="menu-sec" data-i18n="lang.label">Language</p>
+    <div style="padding:0 12px">
+      <div class="seg seg-lang seg-block" role="radiogroup" data-i18n-aria="a11y.langSwitch">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="en" data-i18n="lang.en">EN</button>
+        <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="hi" data-i18n="lang.hi">हिं</button>
+        <button type="button" class="seg-btn" role="radio" aria-checked="false" data-lang="bho" data-i18n="lang.bho">भो</button>
+      </div>
+    </div>
+    <div class="menu-row">
+      <b data-i18n="theme.toggle">Dark mode</b>
+      <button type="button" class="icon-btn" id="themeBtnMenu" data-theme-toggle data-i18n-aria="a11y.themeSwitch"><span class="ico" aria-hidden="true">🌙</span></button>
+    </div>
+    <div class="divider"></div>
+    <div class="menu-list">
+      <a class="menu-item" id="menuCall" href="#contact"><span class="ico" aria-hidden="true">📞</span><span data-i18n="common.call">Call</span></a>
+      <a class="menu-item" id="menuWa" href="#contact" target="_blank" rel="noopener"><span class="ico" aria-hidden="true">💬</span><span data-i18n="common.whatsapp">WhatsApp</span></a>
+    </div>
+    <p class="menu-sec" data-i18n="menu.legal">Legal</p>
+    <div class="menu-list">
+      <a class="menu-item" href="privacy.html"><span class="ico" aria-hidden="true">🔒</span><span data-i18n="footer.privacy">Privacy Policy</span></a>
+      <a class="menu-item" href="terms.html"><span class="ico" aria-hidden="true">📄</span><span data-i18n="footer.terms">Terms of Service</span></a>
+    </div>
   </div>
-  <div id="authBody"></div>
 </div>
 
-<!-- Orders modal -->
-<div id="ordersOverlay" class="overlay" hidden></div>
-<div id="ordersModal" class="modal" hidden>
-  <div class="modalHead">
-    <h3>My Orders</h3>
-    <button id="ordersClose" class="iconBtn" aria-label="Close">✕</button>
+<div class="sheet sheet-sm" id="sheetConfirm" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmBody" hidden tabindex="-1">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-body">
+    <h2 class="confirm-title" id="confirmTitle"></h2>
+    <p class="confirm-body" id="confirmBody"></p>
+    <div class="confirm-actions">
+      <button type="button" class="btn btn-ghost confirm-cancel" data-i18n="common.cancel">Cancel</button>
+      <button type="button" class="btn btn-teal confirm-ok" data-autofocus data-i18n="common.confirm">Confirm</button>
+    </div>
   </div>
-  <div id="ordersBody"></div>
 </div>
+
+<div class="sheet" id="sheetToken" role="dialog" aria-modal="true" aria-labelledby="sheetTokenTitle" hidden tabindex="-1">
+  <div class="sheet-handle" aria-hidden="true"></div>
+  <div class="sheet-head">
+    <h2 class="sheet-title" id="sheetTokenTitle" data-i18n="token.yourToken">Your token</h2>
+    <button type="button" class="icon-btn sheet-close" data-i18n-aria="a11y.close"><span class="ico" aria-hidden="true">✕</span></button>
+  </div>
+  <div class="sheet-body" id="tokenSheetBody"></div>
+</div>
+
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
+<div id="printArea" aria-hidden="true"></div>
 
 <script type="module" src="app.js"></script>
 </body>

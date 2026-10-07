@@ -1,840 +1,695 @@
-// Sri Sai Hospital website — reads LIVE from the same Supabase backend as
-// the apps. Anything changed in the admin app (medicines, prices, stock,
-// doctors, services, settings, announcement) appears here automatically:
-// data refreshes every 60s, whenever the tab regains focus, and the OPD
-// queue refreshes every 30s.
+// app.js — Sri Sai Hospital website core.
+// Reads LIVE from the same Supabase backend as the Android app. Anything
+// changed in the admin app (medicines, doctors, settings, banners…) appears
+// here automatically: catalog refreshes every 60s + on tab focus, the OPD
+// queue widget every 30s while Home is visible.
+//
+// Layout: index.html holds five hash-routed screens (#home #pharmacy #book
+// #token #orders) + overlay sheets; every renderer re-runs on 'langchange'.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { t, getLang, setLang, initLang, onLangChange } from './i18n.js';
+import * as ui from './ui.js';
+
+const { $, esc, inr } = ui;
 
 const SUPABASE_URL = 'https://blpptbmezfzkdctzxafs.supabase.co';
 const ANON_KEY = 'sb_publishable_P40MX5RdTrjKVFPtDzod4A_cXrgiIKf';
-const db = createClient(SUPABASE_URL, ANON_KEY);
+export const db = createClient(SUPABASE_URL, ANON_KEY);
 
-const $ = (id) => document.getElementById(id);
-const inr = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-const esc = (s) =>
-  String(s ?? '').replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// ---------------- persistence ----------------
+const LS = {
+  cart: 'srisai-web-cart',
+  profile: 'srisai-web-profile',
+  orders: 'srisai-web-orders',
+  tokens: 'srisai-web-tokens',
+  appts: 'srisai-web-appts',
+  theme: 'srisai-theme',
+};
+const readLS = (key, fallback) => {
+  try { const v = JSON.parse(localStorage.getItem(key)); return v ?? fallback; } catch { return fallback; }
+};
+const writeLS = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ } };
 
 // ---------------- state ----------------
-let settings = null;
-let medicines = [];
-let categories = [];
-let doctors = [];
-let services = [];
-let banners = [];
-let activeCat = null;
-let bannerIdx = 0;
-let bannerTimer = null;
-let cart = JSON.parse(localStorage.getItem('srisai-web-cart') || '{}'); // {medicineId: qty}
-// Same-as-app ordering & login state
-let session = null;
-let payMethod = 'upi';
-let coupon = null; // { code, discount }
-let placing = false;
-let myOrders = JSON.parse(localStorage.getItem('srisai-web-orders') || '[]');
-let profile = JSON.parse(localStorage.getItem('srisai-web-profile') || '{}');
+export const state = {
+  settings: null,
+  categories: [],
+  medicines: [],
+  doctors: [],
+  services: [],
+  banners: [],
+  session: null,
+  loaded: false,          // first successful loadAll()
+  loadError: false,       // last loadAll() had a failed read
+  activeCat: null,
+  query: '',
+  payMethod: 'upi',
+  coupon: null,           // { code, discount }
+  placing: false,
+  ordersFilter: 'all',
+  route: { name: 'home', sub: null, params: new URLSearchParams() },
+  cart: readLS(LS.cart, {}),           // { [medicineId]: qty }
+  profile: readLS(LS.profile, {}),     // { name, phone, address, city, pincode }
+  orders: readLS(LS.orders, []),       // Order[] newest first (max 30)
+  tokens: readLS(LS.tokens, []),       // Token[] (max 10)
+  appts: readLS(LS.appts, []),         // guest Appt[]
+};
+export const saveCart = () => writeLS(LS.cart, state.cart);
+export const saveProfile = () => writeLS(LS.profile, state.profile);
+export const saveOrders = () => writeLS(LS.orders, state.orders.slice(0, 30));
+export const saveTokens = () => writeLS(LS.tokens, state.tokens.slice(0, 10));
+export const saveAppts = () => writeLS(LS.appts, state.appts);
 
-const saveOrders = () => localStorage.setItem('srisai-web-orders', JSON.stringify(myOrders.slice(0, 30)));
-const saveProfile = () => localStorage.setItem('srisai-web-profile', JSON.stringify(profile));
-
-// ---------------- data loading ----------------
-async function loadAll() {
-  const [st, cats, meds, docs, svcs, bans] = await Promise.all([
-    db.from('settings').select('*').eq('id', 1).maybeSingle(),
-    db.from('categories').select('*').eq('is_active', true).order('sort_order'),
-    db.from('medicines').select('*').eq('is_active', true).order('name'),
-    db.from('doctors').select('*').eq('is_active', true).order('sort_order'),
-    db.from('services').select('*').eq('is_active', true).order('sort_order'),
-    db.from('banners').select('*').eq('is_active', true).order('sort_order'),
-  ]);
-  if (st.data) settings = st.data;
-  categories = cats.data ?? [];
-  medicines = meds.data ?? [];
-  doctors = docs.data ?? [];
-  services = svcs.data ?? [];
-  banners = bans.data ?? [];
-  renderAll();
+// Local calendar date YYYY-MM-DD (NOT toISOString — UTC shifts the day after 18:30 IST).
+export function todayISO(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+const digits = (s) => String(s ?? '').replace(/\D/g, '');
+const telHref = (phone) => `tel:${String(phone ?? '').replace(/\s/g, '')}`;
+const waHref = (text) => {
+  const base = `https://wa.me/${digits(state.settings?.whatsapp)}`;
+  return text ? `${base}?text=${encodeURIComponent(text)}` : base;
+};
+const safeColor = (c, fallback) => (/^#[0-9a-f]{3,8}$/i.test(String(c ?? '')) ? c : fallback);
+const hospitalName = () => state.settings?.hospital_name ?? 'Sri Sai Hospital';
 
-// ---------------- rendering ----------------
-function renderAll() {
-  if (!settings) return;
-  renderHeader();
-  renderStats();
-  renderBanners();
-  renderCats();
-  renderGrid();
-  renderDoctors();
-  renderServices();
-  renderBooking();
-  renderContact();
-  renderCartBadge();
-  loadQueue();
-}
-
-function renderHeader() {
-  document.title = `${settings.hospital_name} — Ayurvedic Care & Pharmacy`;
-  $('brandName').textContent = settings.hospital_name;
-  $('footName').textContent = settings.hospital_name;
-  $('footTagline').textContent = settings.tagline ?? '';
-  $('recognition').textContent = settings.recognition ?? '';
-  $('tagline').textContent = settings.tagline ?? '';
-  $('subTagline').textContent = settings.sub_tagline ?? '';
-  $('patientsNote').textContent = settings.patients_note ?? '';
-  $('badges').innerHTML = (settings.badges ?? [])
-    .map((b) => `<span class="badge">${esc(b)}</span>`).join('');
-  const ann = $('announceBar');
-  if (settings.announcement) {
-    ann.hidden = false;
-    ann.textContent = `📢 ${settings.announcement}`;
-  } else ann.hidden = true;
-  $('deliveryNote').textContent =
-    `Free delivery above ${inr(settings.free_delivery_above)} · Prescription medicines need a valid Rx`;
-}
-
-let statsAnimated = false;
-function renderStats() {
-  const stats = Array.isArray(settings.stats) ? settings.stats : [];
-  $('stats').innerHTML = stats
-    .map((s) => `<div class="stat"><b data-target="${esc(s.value)}">${statsAnimated ? esc(s.value) : '0'}</b><span>${esc(s.label)}</span></div>`)
-    .join('');
-  if (!statsAnimated) countUpWhenVisible();
-}
-
-// Count-up animation for the stat numbers (like the original site)
-function countUpWhenVisible() {
-  const obs = new IntersectionObserver((entries) => {
-    if (!entries.some((e) => e.isIntersecting) || statsAnimated) return;
-    statsAnimated = true;
-    obs.disconnect();
-    document.querySelectorAll('#stats b').forEach((el) => {
-      const target = el.dataset.target ?? '';
-      const num = parseInt(target.replace(/[^0-9]/g, ''), 10);
-      if (!Number.isFinite(num) || num <= 0) { el.textContent = target; return; }
-      const prefix = target.match(/^[^0-9]*/)[0];
-      const suffix = target.replace(/^[^0-9]*[0-9,]+/, '');
-      const t0 = performance.now();
-      const dur = 1400;
-      const tick = (t) => {
-        const p = Math.min(1, (t - t0) / dur);
-        const eased = 1 - Math.pow(1 - p, 3);
-        el.textContent = prefix + Math.round(num * eased).toLocaleString('en-IN') + suffix;
-        if (p < 1) requestAnimationFrame(tick);
-        else el.textContent = target;
-      };
-      requestAnimationFrame(tick);
-    });
-  }, { threshold: 0.4 });
-  const stats = $('stats');
-  if (stats) obs.observe(stats);
-}
-
-function renderCats() {
-  const mk = (id, label, emoji) =>
-    `<button class="cat ${activeCat === id ? 'active' : ''}" data-cat="${id ?? ''}">${emoji ? emoji + ' ' : ''}${esc(label)}</button>`;
-  $('cats').innerHTML =
-    mk(null, 'All', '') + categories.map((c) => mk(c.id, c.name, c.emoji)).join('');
-  $('cats').querySelectorAll('.cat').forEach((b) =>
-    b.addEventListener('click', () => {
-      activeCat = b.dataset.cat || null;
-      renderCats();
-      renderGrid();
-    }));
-}
-
-// ---------------- banner carousel (admin-managed) ----------------
-function renderBanners() {
-  const wrap = $('bannerWrap');
-  if (banners.length === 0) { wrap.hidden = true; return; }
-  wrap.hidden = false;
-  if (bannerIdx >= banners.length) bannerIdx = 0;
-
-  $('bannerTrack').innerHTML = banners.map((b, i) => `
-    <div class="bannerSlide ${i === bannerIdx ? 'on' : ''}"
-         style="background:linear-gradient(135deg, ${esc(b.color_from || '#065F46')}, ${esc(b.color_to || '#059669')})">
-      ${b.image_url ? `<img class="bImg" src="${esc(b.image_url)}" alt="">` : `<span class="bEmoji">${esc(b.emoji || '🌿')}</span>`}
-      <div>
-        <h3>${esc(b.title)}</h3>
-        <p>${esc(b.subtitle ?? '')}</p>
-      </div>
-    </div>`).join('');
-
-  $('bannerDots').innerHTML = banners.length > 1
-    ? banners.map((_, i) =>
-        `<button class="${i === bannerIdx ? 'on' : ''}" data-dot="${i}" aria-label="Banner ${i + 1}"></button>`).join('')
-    : '';
-  $('bannerDots').querySelectorAll('[data-dot]').forEach((d) =>
-    d.addEventListener('click', () => { bannerIdx = Number(d.dataset.dot); renderBanners(); }));
-
-  clearInterval(bannerTimer);
-  if (banners.length > 1) {
-    bannerTimer = setInterval(() => {
-      bannerIdx = (bannerIdx + 1) % banners.length;
-      renderBanners();
-    }, 5000);
-  }
-}
-
-function pct(mrp, price) {
-  if (!mrp || mrp <= price) return 0;
-  return Math.round(((mrp - price) / mrp) * 100);
-}
-
-function renderGrid() {
-  const q = ($('search').value || '').trim().toLowerCase();
-  const list = medicines
-    .filter((m) => (activeCat ? m.category_id === activeCat : true))
-    .filter((m) =>
-      q
-        ? (m.name + ' ' + (m.brand ?? '') + ' ' + (m.composition ?? '')).toLowerCase().includes(q)
-        : true);
-
-  $('grid').innerHTML = list.length === 0
-    ? `<p style="color:var(--muted)">Nothing found — try another search or category.</p>`
-    : list.map((m) => {
-        const off = pct(Number(m.mrp), Number(m.price));
-        const qty = cart[m.id] ?? 0;
-        const out = (m.stock ?? 0) <= 0;
-        const img = m.image_url
-          ? `<img src="${esc(m.image_url)}" alt="" loading="lazy">`
-          : esc(m.emoji || '💊');
-        const action = out
-          ? `<button class="addBtn" disabled>Out of stock</button>`
-          : qty > 0
-            ? `<div class="stepper">
-                 <button data-dec="${m.id}" aria-label="Decrease">−</button>
-                 <b>${qty}</b>
-                 <button data-inc="${m.id}" aria-label="Increase" ${qty >= m.stock ? 'disabled' : ''}>+</button>
-               </div>`
-            : `<button class="addBtn" data-add="${m.id}">+ Add</button>`;
-        return `<div class="card">
-          <div class="tile">${img}
-            ${off > 0 ? `<span class="off">${off}% OFF</span>` : ''}
-            ${m.requires_rx ? `<span class="rx">Rx</span>` : ''}
-          </div>
-          <div class="pname">${esc(m.name)}</div>
-          <div class="ppack">${esc(m.pack_size ?? '')}</div>
-          <div class="prow">
-            <span class="price">${inr(m.price)}</span>
-            ${Number(m.mrp) > Number(m.price) ? `<span class="mrp">${inr(m.mrp)}</span>` : ''}
-          </div>
-          ${!out && m.stock <= 5 ? `<div class="stockLow">Only ${m.stock} left!</div>` : ''}
-          ${action}
-        </div>`;
-      }).join('');
-
-  $('grid').querySelectorAll('[data-add]').forEach((b) =>
-    b.addEventListener('click', () => setQty(b.dataset.add, 1)));
-  $('grid').querySelectorAll('[data-inc]').forEach((b) =>
-    b.addEventListener('click', () => setQty(b.dataset.inc, (cart[b.dataset.inc] ?? 0) + 1)));
-  $('grid').querySelectorAll('[data-dec]').forEach((b) =>
-    b.addEventListener('click', () => setQty(b.dataset.dec, (cart[b.dataset.dec] ?? 0) - 1)));
-}
-
-function renderDoctors() {
-  $('docGrid').innerHTML = doctors.map((d) => `
-    <div class="doc">
-      <div class="docHead">
-        <div class="docAvatar">${d.image_url ? `<img src="${esc(d.image_url)}" alt="" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</div>
-        <div>
-          <h3>${esc(d.name)}</h3>
-          <div class="docSpec">${esc(d.specialty ?? '')}</div>
-          <div class="docQual">${esc(d.qualifications ?? '')}</div>
-        </div>
-      </div>
-      ${d.bio ? `<p class="docBio">${esc(d.bio)}</p>` : ''}
-      <div class="docTags">${(d.expertise ?? []).slice(0, 4).map((e) => `<span class="docTag">${esc(e)}</span>`).join('')}</div>
-    </div>`).join('');
-}
-
-function renderServices() {
-  $('svcGrid').innerHTML = services.map((s) => `
-    <div class="svc">
-      <div class="svcEmoji">${esc(s.emoji || '🩺')}</div>
-      <h3>${esc(s.name)}</h3>
-      <p>${esc(s.description ?? '')}</p>
-    </div>`).join('');
-}
-
-// ---------------- live queue ----------------
-async function loadQueue() {
-  if (doctors.length === 0) return;
-  const cards = await Promise.all(doctors.map(async (d) => {
-    try {
-      const { data } = await db.rpc('queue_status', { p_doctor_id: d.id });
-      if (!data || data.last_issued == null) return ''; // no tokens today
-      const serving = data.serving_no != null ? `#${data.serving_no}` : '—';
-      return `<div class="queueCard">
-        <h4>${esc(d.name)}</h4>
-        <div class="queueNow">${serving}</div>
-        <div class="queueMeta">Now serving · ${data.waiting_count ?? 0} waiting · last token #${data.last_issued}</div>
-      </div>`;
-    } catch { return ''; }
-  }));
-  const html = cards.filter(Boolean).join('');
-  $('queueSection').hidden = html === '';
-  $('queueGrid').innerHTML = html;
-}
-
-// ---------------- cart ----------------
-function setQty(id, qty) {
-  const med = medicines.find((m) => m.id === id);
-  const max = med?.stock ?? 99;
-  if (qty <= 0) delete cart[id];
-  else cart[id] = Math.min(qty, max);
-  localStorage.setItem('srisai-web-cart', JSON.stringify(cart));
-  renderGrid();
-  renderCartBadge();
-  renderDrawer();
-}
-
-function cartDetail() {
-  const lines = Object.entries(cart)
-    .map(([id, qty]) => {
-      const m = medicines.find((x) => x.id === id);
-      return m ? { m, qty: Math.min(qty, m.stock) } : null;
-    })
-    .filter(Boolean);
-  const subtotal = lines.reduce((s, l) => s + Number(l.m.price) * l.qty, 0);
-  const free = Number(settings?.free_delivery_above ?? 499);
-  const fee = subtotal === 0 || subtotal >= free ? 0 : Number(settings?.delivery_fee ?? 40);
-  const savings = lines.reduce(
-    (s, l) => s + Math.max(0, Number(l.m.mrp) - Number(l.m.price)) * l.qty, 0);
-  const discount = Math.min(coupon?.discount ?? 0, subtotal);
-  return {
-    lines, subtotal, fee, discount, free,
-    total: Math.max(0, subtotal + fee - discount),
-    savings: savings + discount,
-  };
-}
-
-function renderCartBadge() {
-  const count = Object.values(cart).reduce((a, b) => a + b, 0);
-  $('cartCount').hidden = count === 0;
-  $('cartCount').textContent = count;
-  $('mCartCount').hidden = count === 0;
-  $('mCartCount').textContent = count;
-}
-
-function renderDrawer() {
-  const d = cartDetail();
-  $('cartLines').innerHTML = d.lines.length === 0
-    ? `<p style="color:var(--muted);text-align:center;padding:20px 0">Your cart is empty 🛒</p>`
-    : d.lines.map(({ m, qty }) => `
-      <div class="cline">
-        <span class="em">${m.image_url ? `<img src="${esc(m.image_url)}" alt="" style="width:34px;height:34px;border-radius:8px;object-fit:cover">` : esc(m.emoji || '💊')}</span>
-        <span class="nm">${esc(m.name)}<br><small style="color:var(--muted)">${inr(m.price)} × ${qty}</small></span>
-        <span class="qty">
-          <button data-ddec="${m.id}" aria-label="Decrease">−</button>
-          <b>${qty}</b>
-          <button data-dinc="${m.id}" aria-label="Increase" ${qty >= m.stock ? 'disabled' : ''}>+</button>
-        </span>
-      </div>`).join('');
-
-  const bar = $('freeBar');
-  if (d.lines.length === 0) bar.hidden = true;
-  else if (d.subtotal >= d.free) {
-    bar.hidden = false; bar.className = 'freeBar done';
-    bar.textContent = '🎉 You get FREE delivery on this order';
-  } else {
-    bar.hidden = false; bar.className = 'freeBar';
-    bar.textContent = `+ ${inr(d.free - d.subtotal)} more for FREE delivery 🚚`;
-  }
-
-  $('cartBill').innerHTML = d.lines.length === 0 ? '' : `
-    <div class="rowb"><span>Items total</span><b>${inr(d.subtotal)}</b></div>
-    <div class="rowb"><span>Delivery</span><b>${d.fee === 0 ? 'FREE' : inr(d.fee)}</b></div>
-    ${d.discount > 0 ? `<div class="rowb save"><span>Coupon (${esc(coupon.code)})</span><b>− ${inr(d.discount)}</b></div>` : ''}
-    ${d.savings > 0 ? `<div class="rowb save"><span>You save</span><b>${inr(d.savings)}</b></div>` : ''}
-    <div class="rowb tot"><span>To pay</span><span>${inr(d.total)}</span></div>`;
-
-  const hasItems = d.lines.length > 0;
-  $('orderForm').style.display = hasItems ? 'grid' : 'none';
-  $('couponBox').hidden = !hasItems;
-  $('orderDone').hidden = true;
-  if (hasItems) {
-    // prefill from the last order / profile (like the app)
-    if (!$('oName').value && profile.name) $('oName').value = profile.name;
-    if (!$('oPhone').value && profile.phone) $('oPhone').value = profile.phone;
-    if (!$('oAddress').value && profile.address) $('oAddress').value = profile.address;
-    if (!$('oCity').value && profile.city) $('oCity').value = profile.city;
-    if (!$('oPincode').value && profile.pincode) $('oPincode').value = profile.pincode;
-    renderPayOpts();
-    $('placeBtn').textContent = `Place Order · ${inr(d.total)}`;
-  }
-
-  $('cartLines').querySelectorAll('[data-dinc]').forEach((b) =>
-    b.addEventListener('click', () => setQty(b.dataset.dinc, (cart[b.dataset.dinc] ?? 0) + 1)));
-  $('cartLines').querySelectorAll('[data-ddec]').forEach((b) =>
-    b.addEventListener('click', () => setQty(b.dataset.ddec, (cart[b.dataset.ddec] ?? 0) - 1)));
-}
-
-// ---------------- payment options (same trio as the app) ----------------
-function renderPayOpts() {
-  const opts = [
-    { key: 'upi', t: 'UPI — any app', s: `GPay, PhonePe, Paytm… pays to ${settings?.upi_vpa ?? ''}` },
-    ...(settings?.razorpay_key_id
-      ? [{ key: 'razorpay', t: 'Card / Netbanking', s: 'Secure Razorpay payment page' }]
-      : []),
-    { key: 'cod', t: 'Cash on Delivery', s: 'Pay when your medicines arrive' },
-  ];
-  if (!opts.some((o) => o.key === payMethod)) payMethod = 'upi';
-  $('payOpts').innerHTML = opts.map((o) => `
-    <label class="payOpt ${payMethod === o.key ? 'on' : ''}" data-pay="${o.key}">
-      <span class="radio"></span>
-      <span><b>${o.t}</b><small>${esc(o.s)}</small></span>
-    </label>`).join('');
-  $('payOpts').querySelectorAll('[data-pay]').forEach((el) =>
-    el.addEventListener('click', () => { payMethod = el.dataset.pay; renderPayOpts(); }));
-}
-
-function upiUrl(amount, note) {
+// UPI deep link — encodeURIComponent per field (URLSearchParams breaks UPI apps with '+').
+export function upiUrl(amount, note) {
+  const s = state.settings ?? {};
   const f = [
-    ['pa', settings.upi_vpa], ['pn', settings.upi_name || settings.hospital_name],
+    ['pa', s.upi_vpa], ['pn', s.upi_name || s.hospital_name],
     ['am', Number(amount).toFixed(2)], ['cu', 'INR'], ['tn', String(note).slice(0, 70)],
   ];
-  return 'upi://pay?' + f.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  return 'upi://pay?' + f.map(([k, v]) => `${k}=${encodeURIComponent(v ?? '')}`).join('&');
 }
 
-// WhatsApp confirmation — same format the app sends, so staff see one style.
-function waOrderMessage(o) {
+// Staff-facing WhatsApp order message — same format the app sends (English on purpose).
+export function waOrderMessage(o) {
   const L = [];
-  L.push(`🛒 *New Medicine Order — ${settings.hospital_name}* (website)`);
+  L.push(`🛒 *New Medicine Order — ${hospitalName()}* (website)`);
   L.push(`Order No: *${o.orderNumber}*`);
   L.push('');
   o.items.forEach((it, i) => L.push(`${i + 1}. ${it.name} x${it.qty} — ${inr(it.price * it.qty)}`));
   L.push('');
   L.push(`*Total: ${inr(o.total)}*`);
-  L.push(`Payment: ${o.payMethod === 'cod' ? 'Cash on Delivery' : o.payMethod.toUpperCase()}`);
+  L.push(`Payment: ${o.payMethod === 'cod' ? 'Cash on Delivery' : String(o.payMethod).toUpperCase()}`);
   L.push('');
   L.push(`👤 ${o.name} · 📞 ${o.phone}`);
   L.push(`📍 ${o.address}, ${o.city} - ${o.pincode}`);
   return L.join('\n');
 }
 
-// ---------------- place order (REAL — same place_order RPC as the app) ----------------
-async function placeOrder() {
-  const d = cartDetail();
-  if (d.lines.length === 0 || placing) return;
-  const name = $('oName').value.trim();
-  const phone = $('oPhone').value.replace(/\D/g, '').slice(-10);
-  const address = $('oAddress').value.trim();
-  const city = $('oCity').value.trim();
-  const pincode = $('oPincode').value.trim();
-  if (name.length < 2) return alert('Please enter your name.');
-  if (phone.length !== 10) return alert('Please enter a valid 10-digit mobile number.');
-  if (!address) return alert('Please enter your delivery address.');
-  if (!city) return alert('Please enter your city.');
-  if (!/^\d{6}$/.test(pincode)) return alert('Pincode should be 6 digits.');
+// ---------------- theme ----------------
+const html = document.documentElement;
+function isDark() {
+  const saved = html.dataset.theme;
+  if (saved) return saved === 'dark';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+function paintThemeIcons() {
+  const ico = isDark() ? '☀️' : '🌙';
+  document.querySelectorAll('[data-theme-toggle] .ico').forEach((el) => { el.textContent = ico; });
+}
+function initTheme() {
+  const saved = localStorage.getItem(LS.theme);
+  if (saved === 'light' || saved === 'dark') html.dataset.theme = saved;
+  paintThemeIcons();
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeIcons);
+  document.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', () => {
+    const next = isDark() ? 'light' : 'dark';
+    html.dataset.theme = next;
+    localStorage.setItem(LS.theme, next);
+    paintThemeIcons();
+  }));
+}
 
-  placing = true;
-  $('placeBtn').disabled = true;
-  $('placeBtn').textContent = 'Placing order…';
-  try {
-    const orderNumber = 'SS-' + Date.now().toString(36).toUpperCase();
-    const { data, error } = await db.rpc('place_order', {
-      p_order_number: orderNumber,
-      p_items: d.lines.map(({ m, qty }) => ({ medicine_id: m.id, qty })),
-      p_customer_name: name,
-      p_phone: phone,
-      p_address: address,
-      p_city: city,
-      p_pincode: pincode,
-      p_payment_method: payMethod,
-      p_prescription_url: null,
-      p_coupon_code: coupon?.code ?? null,
+// ---------------- segmented controls ----------------
+function moveThumb(seg) {
+  const thumb = seg.querySelector('.seg-thumb');
+  const on = seg.querySelector('.seg-btn[aria-checked="true"]');
+  if (!thumb || !on || on.offsetWidth === 0) return;
+  thumb.style.width = on.offsetWidth + 'px';
+  thumb.style.transform = `translateX(${on.offsetLeft - 3}px)`;
+}
+const segObs = new ResizeObserver((entries) => entries.forEach((e) => moveThumb(e.target)));
+
+// initSeg(seg, onPick): click + ←/→ keyboard; onPick(btn) decides state (call setSegValue to reflect).
+export function initSeg(seg, onPick) {
+  const btns = [...seg.querySelectorAll('.seg-btn')];
+  btns.forEach((b, i) => {
+    b.tabIndex = b.getAttribute('aria-checked') === 'true' ? 0 : -1;
+    b.addEventListener('click', () => onPick(b));
+    b.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      const n = btns[(i + (e.key === 'ArrowRight' ? 1 : btns.length - 1)) % btns.length];
+      n.focus();
+      onPick(n);
     });
-    if (error) throw new Error(error.message);
-
-    const order = {
-      orderNumber: data.order_number, name, phone, address, city, pincode,
-      payMethod, total: Number(data.total), discount: Number(data.discount ?? 0),
-      status: 'placed', payStatus: 'pending', createdAt: Date.now(),
-      items: d.lines.map(({ m, qty }) => ({ name: m.name, qty, price: Number(m.price) })),
-    };
-    myOrders.unshift(order);
-    saveOrders();
-    profile = { name, phone, address, city, pincode };
-    saveProfile();
-    cart = {};
-    localStorage.setItem('srisai-web-cart', '{}');
-    coupon = null;
-    renderCartBadge();
-    renderGrid();
-    showOrderDone(order);
-    loadAll(); // refresh live stock
-  } catch (e) {
-    alert(e.message || 'Could not place the order. Please try again.');
-  } finally {
-    placing = false;
-    $('placeBtn').disabled = false;
-    renderDrawer();
-  }
+  });
+  segObs.observe(seg);
+  moveThumb(seg);
+}
+export function setSegValue(seg, attr, value) {
+  seg.querySelectorAll('.seg-btn').forEach((b) => {
+    const on = b.dataset[attr] === value;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  });
+  moveThumb(seg);
+}
+function syncLangSegs() {
+  document.querySelectorAll('.seg-lang').forEach((seg) => setSegValue(seg, 'lang', getLang()));
+}
+function initLangSegs() {
+  document.querySelectorAll('.seg-lang').forEach((seg) => initSeg(seg, (b) => {
+    if (b.dataset.lang === getLang()) return;
+    setLang(b.dataset.lang);
+    ui.toast(t('lang.changed'), 'info');
+  }));
+  syncLangSegs();
 }
 
-async function openRazorpay(o) {
-  try {
-    const { data, error } = await db.functions.invoke('create-payment-link', {
-      body: { orderNumber: o.orderNumber, customerName: o.name, phone: o.phone },
-    });
-    if (error || !data?.url) throw new Error(data?.error ?? 'Payment link failed');
-    window.open(data.url, '_blank');
-  } catch (e) {
-    alert(e.message || 'Razorpay unavailable — you can pay via UPI instead.');
-  }
+// ---------------- router ----------------
+const SCREENS = ['home', 'pharmacy', 'book', 'token', 'orders'];
+export function parseHash() {
+  const raw = location.hash.replace(/^#/, '');
+  const [path, qs] = raw.split('?');
+  const [name, sub] = path.split('/');
+  return { name: SCREENS.includes(name) ? name : 'home', sub: sub || null, params: new URLSearchParams(qs || '') };
 }
-
-function showOrderDone(o) {
-  $('cartLines').innerHTML = '';
-  $('cartBill').innerHTML = '';
-  $('couponBox').hidden = true;
-  $('couponMsg').hidden = true;
-  $('freeBar').hidden = true;
-  $('orderForm').style.display = 'none';
-  const done = $('orderDone');
-  done.hidden = false;
-  done.innerHTML = `
-    <div class="bigTick">✓</div>
-    <h4>Order placed!</h4>
-    <p class="onum">${esc(o.orderNumber)} · ${inr(o.total)}</p>
-    ${o.payMethod === 'upi' ? `<button class="btn btnGold big" id="dPay">⚡ Pay ${inr(o.total)} via UPI</button>` : ''}
-    ${o.payMethod === 'razorpay' ? `<button class="btn btnGold big" id="dRzp">💳 Pay ${inr(o.total)} — Card / Netbanking</button>` : ''}
-    ${o.payMethod === 'cod' ? `<p class="authNote">💵 Keep ${inr(o.total)} ready — pay on delivery.</p>` : ''}
-    <button class="btn big gBtn" id="dWa" style="margin-top:8px">💬 Send order on WhatsApp</button>
-    <button class="linkBtn" id="dTrack">Track in My Orders →</button>`;
-  const pay = $('dPay'); if (pay) pay.addEventListener('click', () => { location.href = upiUrl(o.total, `Order ${o.orderNumber}`); });
-  const rzp = $('dRzp'); if (rzp) rzp.addEventListener('click', () => openRazorpay(o));
-  $('dWa').addEventListener('click', () =>
-    window.open(`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(waOrderMessage(o))}`, '_blank'));
-  $('dTrack').addEventListener('click', () => { closeDrawer(); openOrders(); });
-}
-
-// ---------------- my orders (synced via my_orders_status, guests included) ----------------
-async function syncMyOrders() {
-  const active = myOrders.filter((o) => o.status !== 'delivered' && o.status !== 'cancelled');
-  if (active.length === 0) return;
-  try {
-    const { data } = await db.rpc('my_orders_status', {
-      p_keys: active.slice(0, 50).map((o) => ({ order_number: o.orderNumber, phone: o.phone })),
-    });
-    for (const r of Array.isArray(data) ? data : []) {
-      const o = myOrders.find((x) => x.orderNumber === r.order_number);
-      if (!o) continue;
-      o.status = r.status;
-      o.payStatus = r.payment_status;
-      o.total = Number(r.total);
-      if (r.payment_method) o.payMethod = r.payment_method;
-    }
-    saveOrders();
-  } catch { /* offline — keep local */ }
-}
-
-const STATUS_LABEL = {
-  placed: 'Order Placed', verified: 'Verified', packed: 'Packed',
-  shipped: 'Out for Delivery', delivered: 'Delivered', cancelled: 'Cancelled',
+const SCREEN_RENDER = {
+  home: () => renderHome(),
+  pharmacy: () => renderPharmacy(),
+  book: () => renderBook(),
+  token: () => renderToken(),
+  orders: () => renderOrders(),
 };
+export function router() {
+  const r = parseHash();
+  const prev = state.route;
+  state.route = r;
+  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.dataset.screen === r.name));
+  document.querySelectorAll('.hdr-nav a, .bottombar .bb-item[href]').forEach((a) => {
+    if (a.getAttribute('href') === '#' + r.name) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  if (ui.currentSheet() && ui.currentSheet() !== 'sheetConfirm') ui.closeSheet();
+  if (r.name === 'home' && r.sub) {
+    requestAnimationFrame(() => $(r.sub)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  } else if (prev.name !== r.name || !r.sub) {
+    window.scrollTo({ top: 0 });
+  }
+  SCREEN_RENDER[r.name]?.();
+  if (r.name === 'home') startQueuePoll(); else stopQueuePoll();
+}
 
-function renderOrders() {
-  const body = $('ordersBody');
-  if (myOrders.length === 0) {
-    body.innerHTML = `<p class="emptyOrders">No orders yet on this device.<br>Your medicine orders will appear here with live status.</p>`;
+// ---------------- data loading ----------------
+const safe = (p) => p.then((r) => r, (e) => ({ data: null, error: e }));
+let errorToasted = false;
+
+export async function loadAll() {
+  if (!state.loaded) renderSkeletons();
+  const [st, cats, meds, docs, svcs, bans] = await Promise.all([
+    safe(db.from('settings').select('*').eq('id', 1).maybeSingle()),
+    safe(db.from('categories').select('*').eq('is_active', true).order('sort_order')),
+    safe(db.from('medicines').select('*').eq('is_active', true).order('name').limit(500)),
+    safe(db.from('doctors').select('*').eq('is_active', true).order('sort_order')),
+    safe(db.from('services').select('*').eq('is_active', true).order('sort_order')),
+    safe(db.from('banners').select('*').eq('is_active', true).order('sort_order')),
+  ]);
+  const failed = [st, cats, meds, docs, svcs, bans].some((r) => r.error);
+  if (st.data) state.settings = st.data;
+  if (!cats.error) state.categories = cats.data ?? [];
+  if (!meds.error) state.medicines = meds.data ?? [];
+  if (!docs.error) state.doctors = docs.data ?? [];
+  if (!svcs.error) state.services = svcs.data ?? [];
+  if (!bans.error) state.banners = bans.data ?? [];
+  state.loadError = failed;
+  if (failed && !errorToasted) { errorToasted = true; ui.toast(t('common.errorGeneric'), 'err'); }
+  if (!failed || state.settings) state.loaded = true;
+  renderAll();
+}
+
+function renderSkeletons() {
+  $('docGrid').innerHTML = ui.skeleton('card', 3);
+  $('svcGrid').innerHTML = ui.skeleton('card', 2);
+  $('stats').innerHTML = `<div class="span-6">${ui.skeleton('line', 4)}</div>`;
+  $('offers').hidden = false;
+  $('carTrack').innerHTML = `<div class="car-slide" style="background:none;box-shadow:none;padding:0">${ui.skeleton('banner', 1)}</div>`;
+  $('grid').innerHTML = ui.skeleton('card', 6);
+}
+
+// ---------------- render: everything ----------------
+export function renderAll() {
+  renderChrome();
+  renderCartBadge();
+  SCREEN_RENDER[state.route.name]?.();
+  if (ui.currentSheet() === 'sheetCart') renderCart();
+  if (ui.currentSheet() === 'sheetAccount') renderAccount();
+}
+
+// Title, brand, footer, FAB, quick-action links — anything outside a screen.
+function renderChrome() {
+  const s = state.settings;
+  const name = hospitalName();
+  document.title = `${name} — ${t('app.titleSuffix')}`;
+  document.querySelector('meta[name="description"]')?.setAttribute('content', `${name} — ${t('app.description')}`);
+  $('brandName').textContent = name;
+  $('footName').textContent = name;
+  $('footTagline').textContent = s?.tagline ?? '';
+  $('footRights').textContent = t('footer.rights', { year: new Date().getFullYear(), name });
+  if (s) {
+    const tel = telHref(s.phone);
+    $('quickCall').href = tel;
+    $('menuCall').href = tel;
+    $('quickWa').href = waHref();
+    $('menuWa').href = waHref();
+    $('waFab').href = waHref(`Hello ${name} 🙏`);
+  }
+}
+
+// ---------------- render: HOME ----------------
+export function renderHome() {
+  renderTicker();
+  renderHero();
+  renderBanners();
+  renderStats();
+  renderDoctors();
+  renderServices();
+  renderContact();
+  renderQueue();
+  ui.reveal();
+}
+
+function renderTicker() {
+  const s = state.settings;
+  const bar = $('ticker');
+  const inner = $('tickerText');
+  const text = (s?.announcement ?? '').trim();
+  bar.hidden = !text;
+  if (!text) return;
+  inner.textContent = `📢 ${text}`;
+  inner.classList.remove('marquee');
+  requestAnimationFrame(() => inner.classList.toggle('marquee', inner.scrollWidth > bar.clientWidth));
+}
+
+function renderHero() {
+  const s = state.settings;
+  if (!s) return;
+  $('recognition').textContent = s.recognition ?? '';
+  $('tagline').textContent = s.tagline ?? '';
+  $('subTagline').textContent = s.sub_tagline ?? '';
+  $('patientsNote').textContent = s.patients_note ?? '';
+  $('badges').innerHTML = (Array.isArray(s.badges) ? s.badges : []).map((b) => `<span>${esc(b)}</span>`).join('');
+}
+
+// --- banner carousel: scroll-snap track, dots, 5s auto-advance paused on hover/touch/hidden tab
+let carTimer = null;
+let carPaused = false;
+let carIdx = 0;
+function carSlides() { return [...$('carTrack').querySelectorAll('.car-slide')]; }
+function carGo(i, smooth = true) {
+  const slides = carSlides();
+  if (!slides.length) return;
+  carIdx = (i + slides.length) % slides.length;
+  $('carTrack').scrollTo({ left: slides[carIdx].offsetLeft - $('carTrack').offsetLeft, behavior: smooth ? 'smooth' : 'auto' });
+  paintDots();
+}
+function paintDots() {
+  $('carDots').querySelectorAll('button').forEach((d, i) => {
+    if (i === carIdx) d.setAttribute('aria-current', 'true'); else d.removeAttribute('aria-current');
+  });
+}
+function startCarousel() {
+  clearInterval(carTimer);
+  if (state.banners.length < 2) return;
+  carTimer = setInterval(() => { if (!carPaused && !document.hidden) carGo(carIdx + 1); }, 5000);
+}
+function renderBanners() {
+  const sec = $('offers');
+  const track = $('carTrack');
+  const list = state.banners;
+  if (!state.loaded && !list.length) return; // skeleton stays until first load
+  if (list.length === 0) { sec.hidden = true; clearInterval(carTimer); return; }
+  sec.hidden = false;
+  const keep = Math.min(carIdx, list.length - 1);
+  track.innerHTML = list.map((b, i) => {
+    const from = safeColor(b.color_from, '#0f4c75');
+    const to = safeColor(b.color_to, '#3282b8');
+    const cta = b.action === 'shop'
+      ? `<a class="btn btn-gold sm" href="#pharmacy"><span class="lbl">${esc(t('home.shopNow'))}</span></a>`
+      : b.action === 'book'
+        ? `<a class="btn btn-gold sm" href="#book"><span class="lbl">${esc(t('home.bookNow'))}</span></a>`
+        : '';
+    return `<article class="car-slide" data-idx="${i}" style="background:linear-gradient(135deg,${from},${to})">
+      <div class="car-media">${b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy">` : `<span aria-hidden="true">${esc(b.emoji || '🌿')}</span>`}</div>
+      <div class="car-text"><h3>${esc(b.title)}</h3><p>${esc(b.subtitle ?? '')}</p>${cta}</div>
+    </article>`;
+  }).join('');
+  $('carDots').innerHTML = list.length > 1
+    ? list.map((_, i) => `<button type="button" data-dot="${i}" aria-label="${esc(t('home.bannerDot', { n: i + 1 }))}"></button>`).join('')
+    : '';
+  $('carDots').querySelectorAll('[data-dot]').forEach((d) => d.addEventListener('click', () => carGo(Number(d.dataset.dot))));
+  carIdx = keep;
+  carGo(carIdx, false);
+  startCarousel();
+}
+function initCarousel() {
+  const track = $('carTrack');
+  const car = $('carousel');
+  let scrollT;
+  track.addEventListener('scroll', () => {
+    clearTimeout(scrollT);
+    scrollT = setTimeout(() => {
+      const slides = carSlides();
+      if (!slides.length) return;
+      const w = slides[0].offsetWidth + 16;
+      const i = Math.round(track.scrollLeft / w);
+      if (i !== carIdx && i >= 0 && i < slides.length) { carIdx = i; paintDots(); }
+    }, 80);
+  }, { passive: true });
+  car.addEventListener('mouseenter', () => { carPaused = true; });
+  car.addEventListener('mouseleave', () => { carPaused = false; });
+  car.addEventListener('touchstart', () => { carPaused = true; }, { passive: true });
+  car.addEventListener('touchend', () => { setTimeout(() => { carPaused = false; }, 1500); }, { passive: true });
+  car.addEventListener('focusin', () => { carPaused = true; });
+  car.addEventListener('focusout', () => { carPaused = false; });
+}
+
+// --- stats with count-up (once, when visible)
+let statsAnimated = false;
+function renderStats() {
+  const s = state.settings;
+  if (!s && !state.loaded) return;
+  const stats = Array.isArray(s?.stats) ? s.stats : [];
+  const sec = $('statsSec');
+  sec.hidden = stats.length === 0;
+  if (!stats.length) return;
+  $('stats').innerHTML = stats.map((x) =>
+    `<div class="card tile stat"><b data-target="${esc(x.value)}">${statsAnimated ? esc(x.value) : '0'}</b><span>${esc(x.label)}</span></div>`).join('');
+  if (statsAnimated) return;
+  const obs = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting) || statsAnimated) return;
+    statsAnimated = true;
+    obs.disconnect();
+    $('stats').querySelectorAll('b').forEach((el) => ui.countUp(el, el.dataset.target));
+  }, { threshold: 0.4 });
+  obs.observe($('stats'));
+}
+
+// --- doctors
+function renderDoctors() {
+  if (!state.loaded) return;
+  const list = state.doctors;
+  const grid = $('docGrid');
+  if (!list.length) {
+    grid.innerHTML = `<div class="empty span-6"><span class="empty-ico" aria-hidden="true">🧑‍⚕️</span><h3>${esc(t('home.noDoctors'))}</h3></div>`;
     return;
   }
-  body.innerHTML = myOrders.map((o, i) => `
-    <div class="oCard">
-      <div class="oTop">
-        <div>
-          <div class="oNum">${esc(o.orderNumber)}</div>
-          <div class="oMeta">${new Date(o.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} ·
-            ${o.items.reduce((n, it) => n + it.qty, 0)} items · ${inr(o.total)} ·
-            ${o.payStatus === 'paid' ? '✅ Paid' : o.payStatus === 'refunded' ? '💸 Refunded' : '⏳ Payment pending'}</div>
+  grid.innerHTML = list.map((d) => {
+    const id = encodeURIComponent(d.id);
+    const tags = (Array.isArray(d.expertise) ? d.expertise : []).slice(0, 4);
+    return `<article class="card lift dcard">
+      <div class="dhead">
+        <div class="avatar">${d.image_url ? `<img src="${esc(d.image_url)}" alt="${esc(t('a11y.doctorPhoto'))}" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</div>
+        <div style="min-width:0">
+          <h3>${esc(d.name)}</h3>
+          <div class="dspec">${esc(d.specialty ?? '')}</div>
+          <div class="dqual">${esc(d.qualifications ?? '')}</div>
         </div>
-        <span class="pill ${o.status}">${STATUS_LABEL[o.status] ?? o.status}</span>
       </div>
-      <div class="oActions">
-        ${o.payStatus === 'pending' && o.status !== 'cancelled' && o.payMethod !== 'cod'
-          ? `<button class="oBtn gold" data-opay="${i}">⚡ Pay ${inr(o.total)}</button>` : ''}
-        ${(o.status === 'placed' || o.status === 'verified')
-          ? `<button class="oBtn" data-ocancel="${i}">Cancel</button>` : ''}
-        <button class="oBtn" data-owa="${i}">WhatsApp</button>
+      ${tags.length ? `<div class="tags">${tags.map((e) => `<span>${esc(e)}</span>`).join('')}</div>` : ''}
+      ${d.bio ? `<div><p class="bio" data-bio>${esc(d.bio)}</p><button type="button" class="btn btn-link sm" data-more>${esc(t('common.readMore'))}</button></div>` : ''}
+      <div class="btn-row">
+        <a class="btn btn-teal sm" href="#book?doctor=${id}"><span class="ico" aria-hidden="true">📅</span><span class="lbl">${esc(t('home.bookWith'))}</span></a>
+        <a class="btn btn-gold sm" href="#token?doctor=${id}"><span class="ico" aria-hidden="true">🎫</span><span class="lbl">${esc(t('home.tokenWith'))}</span></a>
+        ${d.phone ? `<a class="btn btn-ghost sm" href="${esc(telHref(d.phone))}"><span class="ico" aria-hidden="true">📞</span><span class="lbl">${esc(t('common.call'))}</span></a>` : ''}
       </div>
-    </div>`).join('');
-
-  body.querySelectorAll('[data-opay]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const o = myOrders[Number(b.dataset.opay)];
-      if (o.payMethod === 'razorpay') openRazorpay(o);
-      else location.href = upiUrl(o.total, `Order ${o.orderNumber}`);
-    }));
-  body.querySelectorAll('[data-ocancel]').forEach((b) =>
-    b.addEventListener('click', async () => {
-      const o = myOrders[Number(b.dataset.ocancel)];
-      if (!confirm(`Cancel order ${o.orderNumber}? This cannot be undone.`)) return;
-      try {
-        const { error } = await db.rpc('cancel_my_order', {
-          p_order_number: o.orderNumber, p_phone: o.phone,
-        });
-        if (error) throw new Error(error.message);
-        o.status = 'cancelled';
-        saveOrders();
-        renderOrders();
-      } catch (e) { alert(e.message || 'Could not cancel — contact the hospital.'); }
-    }));
-  body.querySelectorAll('[data-owa]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const o = myOrders[Number(b.dataset.owa)];
-      window.open(`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(`Hello, regarding my order *${o.orderNumber}* 🙏`)}`, '_blank');
-    }));
+    </article>`;
+  }).join('');
+  grid.querySelectorAll('[data-more]').forEach((b) => b.addEventListener('click', () => {
+    const bio = b.parentElement.querySelector('[data-bio]');
+    const open = bio.classList.toggle('open');
+    b.textContent = t(open ? 'common.readLess' : 'common.readMore');
+  }));
 }
 
-async function openOrders() {
-  $('ordersOverlay').hidden = false;
-  $('ordersModal').hidden = false;
-  renderOrders();
-  await syncMyOrders();
-  renderOrders();
+// --- services
+function renderServices() {
+  if (!state.loaded) return;
+  const list = state.services;
+  const grid = $('svcGrid');
+  if (!list.length) {
+    grid.innerHTML = `<div class="empty"><span class="empty-ico" aria-hidden="true">🩺</span><h3>${esc(t('home.noServices'))}</h3></div>`;
+    return;
+  }
+  grid.innerHTML = list.map((s) => `
+    <article class="card lift scard">
+      <span class="ico" aria-hidden="true">${esc(s.emoji || '🩺')}</span>
+      <h3>${esc(s.name)}</h3>
+      <p>${esc(s.description ?? '')}</p>
+    </article>`).join('');
 }
 
-// ---------------- booking ----------------
-function renderBooking() {
-  $('bDoctor').innerHTML = doctors
-    .map((d) => `<option value="${d.id}">${esc(d.name)} — ${esc(d.specialty ?? '')}</option>`).join('');
-  $('bService').innerHTML =
-    `<option value="General Consultation">General Consultation</option>` +
-    services.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
-  $('bTime').innerHTML = (settings.time_slots ?? [])
-    .map((t) => `<option>${esc(t)}</option>`).join('');
-  $('bDate').min = new Date().toISOString().slice(0, 10);
-  updateFee();
-}
-
-function updateFee() {
-  const online = $('bType').value === 'online';
-  $('bFee').value = inr(online ? settings.fee_online ?? 200 : settings.fee_offline ?? 300);
-}
-
+// --- contact bento
 function renderContact() {
-  $('cAddress').textContent = settings.address ?? '';
-  $('cPhone').textContent = settings.phone ?? '';
-  $('cPhone').href = `tel:${(settings.phone ?? '').replace(/\s/g, '')}`;
-  $('cWa').href = `https://wa.me/${settings.whatsapp}`;
-  $('cEmail').textContent = settings.email ?? '';
-  $('cEmail').href = `mailto:${settings.email ?? ''}`;
-  $('waFab').href = `https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(`Hello ${settings.hospital_name} 🙏`)}`;
-  // booking aside: live fees + call shortcut
-  $('aFeeOff').textContent = inr(settings.fee_offline ?? 300);
-  $('aFeeOn').textContent = inr(settings.fee_online ?? 200);
-  $('aPhone').textContent = `📞 ${settings.phone ?? ''}`;
-  $('aPhone').href = `tel:${(settings.phone ?? '').replace(/\s/g, '')}`;
-  $('mCall').href = `tel:${(settings.phone ?? '').replace(/\s/g, '')}`;
+  const s = state.settings;
+  if (!s) return;
+  const tiles = [];
+  if (s.address) {
+    tiles.push(`<div class="card tile span-3"><span class="ico" aria-hidden="true">📍</span><span class="lbl">${esc(t('home.address'))}</span><span class="val">${esc(s.address)}</span>
+      <a class="btn btn-ghost sm" href="https://maps.google.com/?q=${encodeURIComponent(s.address)}" target="_blank" rel="noopener"><span class="ico" aria-hidden="true">🗺️</span><span class="lbl">${esc(t('home.directions'))}</span></a></div>`);
+  }
+  if (s.phone) {
+    tiles.push(`<div class="card tile span-3"><span class="ico" aria-hidden="true">📞</span><span class="lbl">${esc(t('home.phone'))}</span><a class="val" href="${esc(telHref(s.phone))}">${esc(s.phone)}</a></div>`);
+  }
+  if (s.whatsapp) {
+    tiles.push(`<div class="card tile span-3"><span class="ico" aria-hidden="true">💬</span><span class="lbl">${esc(t('home.whatsapp'))}</span><a class="val" href="${esc(waHref())}" target="_blank" rel="noopener">${esc(t('home.chat'))}</a></div>`);
+  }
+  if (s.email) {
+    tiles.push(`<div class="card tile span-3"><span class="ico" aria-hidden="true">✉️</span><span class="lbl">${esc(t('home.email'))}</span><a class="val" href="mailto:${esc(s.email)}">${esc(s.email)}</a></div>`);
+  }
+  $('contactGrid').innerHTML = tiles.join('');
+  $('contact').hidden = tiles.length === 0;
 }
 
-// ---------------- events ----------------
-$('search').addEventListener('input', renderGrid);
-$('bType').addEventListener('change', updateFee);
+// --- live OPD queue widget (home) — queue_status per doctor, 30s while home + tab visible
+let queueTimer = null;
+let queueData = {}; // doctorId -> { serving_no, last_issued, waiting_count }
+async function loadQueue() {
+  if (!state.doctors.length || document.hidden || state.route.name !== 'home') return;
+  const next = {};
+  await Promise.all(state.doctors.map(async (d) => {
+    try {
+      const { data } = await db.rpc('queue_status', { p_doctor_id: d.id });
+      if (data && data.last_issued != null) next[d.id] = data;
+    } catch { /* keep hidden */ }
+  }));
+  queueData = next;
+  renderQueue();
+}
+function renderQueue() {
+  const sec = $('queueWidget');
+  const cards = state.doctors.filter((d) => queueData[d.id]);
+  sec.hidden = cards.length === 0;
+  if (!cards.length) return;
+  $('queueGrid').innerHTML = cards.map((d) => {
+    const q = queueData[d.id];
+    const serving = q.serving_no != null ? `#${esc(q.serving_no)}` : esc(t('home.notStarted'));
+    return `<article class="card qcard">
+      <h3>${esc(d.name)}</h3>
+      <span class="dqual">${esc(t('home.nowServing'))}</span>
+      <div class="qnow">${serving}</div>
+      <div class="qmeta"><span>${esc(t('home.lastToken'))} #${esc(q.last_issued)}</span><span>${esc(t('home.waiting', { n: q.waiting_count ?? 0 }))}</span></div>
+      <a class="btn btn-teal sm" href="#token?doctor=${encodeURIComponent(d.id)}" style="align-self:flex-start"><span class="ico" aria-hidden="true">🎫</span><span class="lbl">${esc(t('home.takeToken'))}</span></a>
+    </article>`;
+  }).join('');
+}
+function startQueuePoll() {
+  stopQueuePoll();
+  loadQueue();
+  queueTimer = setInterval(loadQueue, 30_000);
+}
+function stopQueuePoll() { clearInterval(queueTimer); queueTimer = null; }
 
-const openDrawer = () => {
-  renderDrawer();
-  $('drawer').hidden = false;
-  $('overlay').hidden = false;
-};
-const closeDrawer = () => { $('drawer').hidden = true; $('overlay').hidden = true; };
-$('cartBtn').addEventListener('click', openDrawer);
-$('mCart').addEventListener('click', openDrawer);
-$('closeDrawer').addEventListener('click', closeDrawer);
-$('overlay').addEventListener('click', closeDrawer);
+// ---------------- cart badge (cart logic lands in FEAT-002) ----------------
+export function cartCount() {
+  return Object.values(state.cart).reduce((a, b) => a + Number(b || 0), 0);
+}
+export function renderCartBadge(bumpIt = false) {
+  const n = cartCount();
+  ['cartCount', 'cartCountBar'].forEach((id) => {
+    const el = $(id);
+    el.hidden = n === 0;
+    el.textContent = n;
+    if (bumpIt && n > 0) ui.bump(el);
+  });
+  $('cartBtn').setAttribute('aria-label', n ? t('a11y.cartCount', { n }) : t('a11y.openCart'));
+}
 
-// mobile hamburger menu
-$('menuBtn').addEventListener('click', () => {
-  $('mobileMenu').hidden = !$('mobileMenu').hidden;
-});
-$('mobileMenu').querySelectorAll('a').forEach((a) =>
-  a.addEventListener('click', () => { $('mobileMenu').hidden = true; }));
+// ---------------- screen shells (filled by later FEATs) ----------------
+const emptyState = (ico, title, sub = '', btn = '') =>
+  `<div class="empty"><span class="empty-ico" aria-hidden="true">${ico}</span><h3>${esc(title)}</h3>${sub ? `<p>${esc(sub)}</p>` : ''}${btn}</div>`;
 
-$('orderForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  placeOrder();
-});
-
-// coupon — same check_coupon RPC as the app
-$('couponApply').addEventListener('click', async () => {
-  const code = $('couponInput').value.trim().toUpperCase();
-  const msgEl = $('couponMsg');
-  if (!code) return;
-  $('couponApply').disabled = true;
-  try {
-    const { data, error } = await db.rpc('check_coupon', {
-      p_code: code, p_subtotal: cartDetail().subtotal,
-    });
-    if (error) throw new Error(error.message);
-    msgEl.hidden = false;
-    if (data.valid) {
-      coupon = { code, discount: Number(data.discount) };
-      msgEl.className = 'couponMsg ok';
-    } else {
-      coupon = null;
-      msgEl.className = 'couponMsg bad';
-    }
-    msgEl.textContent = data.message;
-  } catch (e) {
-    coupon = null;
-    msgEl.hidden = false;
-    msgEl.className = 'couponMsg bad';
-    msgEl.textContent = e.message || 'Could not check the coupon';
-  } finally {
-    $('couponApply').disabled = false;
-    renderDrawer();
-    $('couponMsg').hidden = false;
+// Pharmacy: category chips + delivery note now; product cards come in FEAT-002.
+export function renderPharmacy() {
+  const s = state.settings;
+  $('deliveryNote').textContent = s
+    ? `${t('shop.freeDeliveryAbove', { amount: inr(s.free_delivery_above ?? 0) })} · ${t('shop.rxNote')}`
+    : '';
+  const mk = (id, label, emoji) =>
+    `<button type="button" class="chip ${state.activeCat === id ? 'on' : ''}" aria-pressed="${state.activeCat === id}" data-cat="${esc(id ?? '')}">${emoji ? `<span aria-hidden="true">${esc(emoji)}</span>` : ''}${esc(label)}</button>`;
+  $('cats').innerHTML = mk(null, t('shop.all'), '') + state.categories.map((c) => mk(c.id, c.name, c.emoji)).join('');
+  $('cats').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
+    state.activeCat = b.dataset.cat || null;
+    renderPharmacy();
+  }));
+  const grid = $('grid');
+  if (!state.loaded) { grid.innerHTML = ui.skeleton('card', 6); return; }
+  if (state.loadError && !state.medicines.length) {
+    grid.innerHTML = emptyState('⚠️', t('shop.loadError'), '', `<button type="button" class="btn btn-teal" data-retry><span class="lbl">${esc(t('common.retry'))}</span></button>`);
+    grid.querySelector('[data-retry]')?.addEventListener('click', () => { grid.innerHTML = ui.skeleton('card', 6); loadAll(); });
+    return;
   }
-});
+  if (!state.medicines.length) { grid.innerHTML = emptyState('💊', t('shop.emptyCatalog')); return; }
+  grid.innerHTML = ''; // FEAT-002 renders .pcard list + search/filter here
+}
 
-// ---------------- auth (same providers as the app) ----------------
-let authMode = 'email'; // email | password | code
-let authEmail = '';
+// Cart sheet: FEAT-002 adds lines/stepper/checkout; today a read-only summary.
+export function renderCart() {
+  const body = $('cartBody');
+  $('cartFoot').hidden = true;
+  const lines = Object.entries(state.cart)
+    .map(([id, qty]) => ({ m: state.medicines.find((x) => x.id === id), qty: Number(qty) }))
+    .filter((l) => l.m && l.qty > 0);
+  if (!lines.length) {
+    body.innerHTML = emptyState('🛒', t('cart.empty'), t('cart.emptySub'),
+      `<a class="btn btn-teal" href="#pharmacy" data-close-sheet><span class="lbl">${esc(t('cart.browse'))}</span></a>`);
+    return;
+  }
+  body.innerHTML = `<ul style="list-style:none;margin:0;padding:0">${lines.map(({ m, qty }) =>
+    `<li style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)"><span>${esc(m.name)} <span class="muted">× ${qty}</span></span><b>${inr(Number(m.price) * qty)}</b></li>`).join('')}</ul>
+    <p class="muted" style="margin-top:12px;font-size:var(--fs-sm)">${esc(t('cart.estimate'))}</p>`;
+}
 
-function openAuth() { $('authOverlay').hidden = false; $('authModal').hidden = false; renderAuth(); }
-function closeAuth() { $('authOverlay').hidden = true; $('authModal').hidden = true; }
-$('authBtn').addEventListener('click', openAuth);
-$('authClose').addEventListener('click', closeAuth);
-$('authOverlay').addEventListener('click', closeAuth);
-$('ordersBtn').addEventListener('click', openOrders);
-$('ordersClose').addEventListener('click', () => { $('ordersOverlay').hidden = true; $('ordersModal').hidden = true; });
-$('ordersOverlay').addEventListener('click', () => { $('ordersOverlay').hidden = true; $('ordersModal').hidden = true; });
+// Book: "how it works" + my-appointments empty state; the form arrives in FEAT-005.
+export function renderBook() {
+  $('bookForm').innerHTML = '';
+  $('bookHow').innerHTML = `<div class="card" style="padding:20px">
+    <h3 style="font-family:var(--font-ui);font-size:var(--fs-md);margin-bottom:12px">${esc(t('book.howTitle'))}</h3>
+    ${['📋', '💬', '🏥'].map((ico, i) => `<div style="display:flex;gap:12px;align-items:center;min-height:40px"><span class="ico" aria-hidden="true" style="font-size:22px">${ico}</span><span>${esc(t(`book.how${i + 1}`))}</span></div>`).join('')}
+  </div>`;
+  const appts = state.appts;
+  $('myAppts').innerHTML = appts.length
+    ? '' // FEAT-005 renders appointment cards
+    : emptyState('📅', state.session ? t('book.empty') : t('book.signInToSee'), state.session ? t('book.emptySub') : '');
+}
 
-function renderAuth() {
-  const body = $('authBody');
-  if (session) {
-    $('authTitle').textContent = 'My Account';
-    body.innerHTML = `
-      <div class="signedCard">
-        <div style="font-size:30px">🙏</div>
-        <b>${esc(session.user.email ?? session.user.phone ?? 'Signed in')}</b>
-        <p class="tiny" style="margin-top:4px">Same account works in the Sri Sai Hospital app.</p>
+// Token: intro + note; form/live card arrive in FEAT-006.
+export function renderToken() {
+  $('tokenLive').innerHTML = '';
+  $('tokenForm').innerHTML = emptyState('🎫', t('token.intro'), t('token.note'));
+}
+
+// Orders: filter seg + empty state; full cards/sync arrive in FEAT-004.
+export function renderOrders() {
+  const list = state.orders;
+  $('ordersSync').textContent = '';
+  const el = $('ordersList');
+  if (!list.length) {
+    el.innerHTML = emptyState('📦', t('orders.empty'), t('orders.emptySub'),
+      `<a class="btn btn-teal" href="#pharmacy"><span class="lbl">${esc(t('cart.browse'))}</span></a>`);
+    return;
+  }
+  const active = (o) => o.status !== 'delivered' && o.status !== 'cancelled';
+  const shown = list.filter((o) => state.ordersFilter === 'all' ? true : state.ordersFilter === 'active' ? active(o) : !active(o));
+  el.innerHTML = shown.map((o) => `<article class="card ocard" style="padding:16px;margin-bottom:12px;display:flex;justify-content:space-between;gap:12px;align-items:center">
+      <div><b>${esc(o.orderNumber)}</b><div class="muted" style="font-size:var(--fs-sm)">${esc(t('orders.placedOn', { date: new Date(o.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) }))} · ${inr(o.total)}</div></div>
+      <span class="pill pill-${esc(o.status)}">${esc(t(`orders.status.${o.status}`))}</span>
+    </article>`).join('') || emptyState('📦', t('orders.empty'));
+}
+
+// Account sheet: FEAT-007 adds the sign-in flows; today shows session state only.
+export function renderAccount() {
+  const body = $('accountBody');
+  const s = state.session;
+  $('sheetAccountTitle').textContent = t(s ? 'account.title' : 'auth.title');
+  if (s) {
+    body.innerHTML = `<div class="card" style="padding:16px;text-align:center;margin-bottom:12px">
+        <div style="font-size:30px" aria-hidden="true">🙏</div>
+        <div class="muted" style="font-size:var(--fs-xs)">${esc(t('account.signedInAs'))}</div>
+        <b>${esc(s.user.email ?? s.user.phone ?? '')}</b>
+        <p class="muted" style="font-size:var(--fs-sm);margin-top:6px">${esc(t('account.sameApp'))}</p>
       </div>
-      <button class="btn btnGold big" id="auOrders" style="margin-top:12px">📦 My Orders</button>
-      <input id="auNewPass" class="authField" type="password" placeholder="Set / change password (min 6 chars)">
-      <button class="gBtn" id="auSetPass" style="margin-top:10px">🔑 Save Password</button>
-      <p class="authNote">With a password you can also sign in without waiting for an email code.</p>
-      <button class="linkBtn" id="auOut">Sign out</button>`;
-    $('auOrders').addEventListener('click', () => { closeAuth(); openOrders(); });
-    $('auSetPass').addEventListener('click', async () => {
-      const pw = $('auNewPass').value;
-      if (pw.length < 6) return alert('Password must be at least 6 characters.');
-      const { error } = await db.auth.updateUser({ password: pw });
-      if (error) return alert(error.message);
-      $('auNewPass').value = '';
-      alert('Password saved ✅ — you can now sign in with email + password.');
+      <a class="btn btn-ghost block" href="#orders"><span class="ico" aria-hidden="true">📦</span><span class="lbl">${esc(t('account.myOrders'))}</span></a>
+      <button type="button" class="btn btn-link block" data-signout style="margin-top:8px">${esc(t('account.signOut'))}</button>`;
+    body.querySelector('[data-signout]').addEventListener('click', async () => {
+      await db.auth.signOut();
+      ui.toast(t('account.signedOut'), 'ok');
+      ui.closeSheet();
     });
-    $('auOut').addEventListener('click', async () => { await db.auth.signOut(); renderAuth(); });
     return;
   }
-
-  $('authTitle').textContent = 'Sign in';
-  if (authMode === 'code') {
-    body.innerHTML = `
-      <p class="authNote">Enter the 6-digit code sent to<br><b>${esc(authEmail)}</b> — check spam too.</p>
-      <input id="auCode" class="authField codeInput" inputmode="numeric" maxlength="6" placeholder="••••••">
-      <button class="btn btnGold big" id="auVerify" style="margin-top:12px">Verify & Continue</button>
-      <button class="linkBtn" id="auBack">Change email</button>`;
-    $('auCode').focus();
-    $('auVerify').addEventListener('click', async () => {
-      const token = $('auCode').value.trim();
-      if (token.length < 6) return alert('Enter the 6-digit code.');
-      const { error } = await db.auth.verifyOtp({ email: authEmail, token, type: 'email' });
-      if (error) return alert(error.message);
-      closeAuth();
-    });
-    $('auBack').addEventListener('click', () => { authMode = 'email'; renderAuth(); });
-    return;
-  }
-
-  body.innerHTML = `
-    <button class="gBtn" id="auGoogle"><span class="gIcon">G</span> Continue with Google</button>
-    <div class="orLine">or use your email</div>
-    <input id="auEmail" class="authField" type="email" placeholder="you@example.com" value="${esc(authEmail)}">
-    ${authMode === 'password' ? `<input id="auPass" class="authField" type="password" placeholder="Password">` : ''}
-    <button class="btn btnGold big" id="auGo" style="margin-top:12px">${authMode === 'password' ? 'Sign In' : 'Continue'}</button>
-    ${authMode === 'email'
-      ? `<p class="authNote">We'll email you a 6-digit code. New here? Your account is created automatically.</p>
-         <button class="linkBtn" id="auTogglePw">Sign in with password instead</button>`
-      : `<button class="linkBtn" id="auTogglePw">Email me a code instead</button>`}`;
-
-  $('auGoogle').addEventListener('click', async () => {
-    const { error } = await db.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: location.origin + location.pathname },
-    });
-    if (error) alert(error.message);
-  });
-  $('auTogglePw').addEventListener('click', () => {
-    authMode = authMode === 'password' ? 'email' : 'password';
-    authEmail = $('auEmail').value.trim().toLowerCase();
-    renderAuth();
-  });
-  $('auGo').addEventListener('click', async () => {
-    authEmail = $('auEmail').value.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(authEmail)) return alert('Enter a valid email address.');
-    if (authMode === 'password') {
-      const pw = $('auPass').value;
-      if (pw.length < 6) return alert('Password is at least 6 characters.');
-      const { error } = await db.auth.signInWithPassword({ email: authEmail, password: pw });
-      if (error) return alert(error.message);
-      closeAuth();
-    } else {
-      const { error } = await db.auth.signInWithOtp({
-        email: authEmail, options: { shouldCreateUser: true },
-      });
-      if (error) return alert(error.message);
-      authMode = 'code';
-      renderAuth();
-    }
-  });
+  body.innerHTML = emptyState('👤', t('auth.title'), t('auth.sub'));
 }
 
-db.auth.onAuthStateChange((_event, s) => {
-  session = s;
-  $('authBtn').textContent = s ? '✅' : '👤';
-  if (!$('authModal').hidden) renderAuth();
-});
-db.auth.getSession().then(({ data }) => {
-  session = data.session;
-  $('authBtn').textContent = session ? '✅' : '👤';
-});
+// ---------------- auth state ----------------
+function paintAuth() {
+  $('accountDot').hidden = !state.session;
+  if (ui.currentSheet() === 'sheetAccount') renderAccount();
+}
+db.auth.onAuthStateChange((_e, s) => { state.session = s; paintAuth(); renderBook(); });
+db.auth.getSession().then(({ data }) => { state.session = data.session; paintAuth(); });
 
-$('bookForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const doc = doctors.find((d) => d.id === $('bDoctor').value);
-  const phone = $('bPhone').value.replace(/\D/g, '').slice(-10);
-  if (phone.length !== 10) { alert('Please enter a valid 10-digit mobile number.'); return; }
-  const L = [];
-  L.push(`🩺 *Appointment Request — ${settings.hospital_name}* (website)`);
-  L.push('');
-  L.push(`Doctor: *${doc?.name ?? ''}*`);
-  L.push(`Service: ${$('bService').value}`);
-  L.push(`Type: ${$('bType').value === 'online' ? 'Online (video)' : 'In-person visit'}`);
-  L.push(`Date: ${$('bDate').value}`);
-  L.push(`Time: ${$('bTime').value}`);
-  L.push(`Fee: ${$('bFee').value}`);
-  if ($('bNotes').value.trim()) L.push(`Notes: ${$('bNotes').value.trim()}`);
-  L.push('');
-  L.push(`👤 Patient: ${$('bName').value.trim()}`);
-  L.push(`📞 ${phone}`);
-  window.open(`https://wa.me/${settings.whatsapp}?text=${encodeURIComponent(L.join('\n'))}`, '_blank');
-});
+// ---------------- wiring ----------------
+function initChrome() {
+  $('skipLink').addEventListener('click', (e) => { e.preventDefault(); $('main').focus(); });
+  const hdr = $('hdr');
+  const onScroll = () => hdr.classList.toggle('scrolled', window.scrollY > 8);
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
 
-// ---------------- scroll reveal ----------------
-const revealObs = new IntersectionObserver(
-  (entries) => entries.forEach((e) => e.isIntersecting && e.target.classList.add('in')),
-  { threshold: 0.12 },
-);
-document.querySelectorAll('.reveal').forEach((el) => revealObs.observe(el));
+  $('cartBtn').addEventListener('click', () => { renderCart(); ui.openSheet('sheetCart'); });
+  $('cartBtnBar').addEventListener('click', () => { renderCart(); ui.openSheet('sheetCart'); });
+  $('accountBtn').addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
+  $('menuAccount').addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
+  $('menuBtn').addEventListener('click', () => ui.openSheet('sheetMenu'));
 
-// ---------------- live refresh ----------------
+  // links inside sheets that navigate: close the sheet first
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-close-sheet]');
+    if (a) ui.closeSheet();
+  });
+
+  // orders filter seg (state only; FEAT-004 renders the list)
+  const seg = $('ordersFilter');
+  initSeg(seg, (b) => { state.ordersFilter = b.dataset.filter; setSegValue(seg, 'filter', b.dataset.filter); renderOrders(); });
+
+  // search field shell (FEAT-002 wires filtering); keep the clear button honest
+  const search = $('search');
+  const clear = $('searchClear');
+  search.addEventListener('input', () => { state.query = search.value.trim(); clear.hidden = !search.value; });
+  clear.addEventListener('click', () => { search.value = ''; state.query = ''; clear.hidden = true; search.focus(); renderPharmacy(); });
+}
+
+// ---------------- boot ----------------
+initLang();
+initTheme();
+initChrome();
+initCarousel();
+initLangSegs();
+router();
 loadAll();
-syncMyOrders();
-setInterval(loadAll, 60_000);          // full refresh every minute
-setInterval(loadQueue, 30_000);        // queue every 30s
+
+onLangChange(() => {
+  syncLangSegs();
+  renderAll();
+});
+window.addEventListener('hashchange', router);
+setInterval(loadAll, 60_000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') loadAll();
+  if (document.visibilityState === 'visible') { loadAll(); if (state.route.name === 'home') loadQueue(); }
 });
