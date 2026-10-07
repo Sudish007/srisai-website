@@ -431,6 +431,7 @@ function renderStats() {
 }
 
 // --- doctors
+const bioOpen = new Set(); // doctor ids with "Read more" expanded — survives 60 s refresh + langchange
 function renderDoctors() {
   if (!state.loaded) return;
   const list = state.doctors;
@@ -442,7 +443,8 @@ function renderDoctors() {
   grid.innerHTML = list.map((d) => {
     const id = encodeURIComponent(d.id);
     const tags = (Array.isArray(d.expertise) ? d.expertise : []).slice(0, 4);
-    return `<article class="card lift dcard">
+    const open = bioOpen.has(String(d.id));
+    return `<article class="card lift dcard" data-doc="${esc(d.id)}">
       <div class="dhead">
         <div class="avatar">${d.image_url ? `<img src="${esc(d.image_url)}" alt="${esc(t('a11y.doctorPhoto'))}" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</div>
         <div style="min-width:0">
@@ -452,7 +454,7 @@ function renderDoctors() {
         </div>
       </div>
       ${tags.length ? `<div class="tags">${tags.map((e) => `<span>${esc(e)}</span>`).join('')}</div>` : ''}
-      ${d.bio ? `<div><p class="bio" data-bio>${esc(d.bio)}</p><button type="button" class="btn btn-link sm" data-more>${esc(t('common.readMore'))}</button></div>` : ''}
+      ${d.bio ? `<div><p class="bio ${open ? 'open' : ''}" data-bio>${esc(d.bio)}</p><button type="button" class="btn btn-link sm" data-more aria-expanded="${open}">${esc(t(open ? 'common.readLess' : 'common.readMore'))}</button></div>` : ''}
       <div class="btn-row">
         <a class="btn btn-teal sm" href="#book?doctor=${id}"><span class="ico" aria-hidden="true">📅</span><span class="lbl">${esc(t('home.bookWith'))}</span></a>
         <a class="btn btn-gold sm" href="#token?doctor=${id}"><span class="ico" aria-hidden="true">🎫</span><span class="lbl">${esc(t('home.tokenWith'))}</span></a>
@@ -463,6 +465,9 @@ function renderDoctors() {
   grid.querySelectorAll('[data-more]').forEach((b) => b.addEventListener('click', () => {
     const bio = b.parentElement.querySelector('[data-bio]');
     const open = bio.classList.toggle('open');
+    const id = b.closest('[data-doc]').dataset.doc;
+    if (open) bioOpen.add(id); else bioOpen.delete(id);
+    b.setAttribute('aria-expanded', String(open));
     b.textContent = t(open ? 'common.readLess' : 'common.readMore');
   }));
 }
@@ -656,7 +661,8 @@ export function renderPharmacy() {
     state.activeCat = b.dataset.cat || null;
     renderPharmacy();
   }));
-  if ($('search').value !== state.query) $('search').value = state.query;
+  // never rewrite the search box while the user is typing in it (60 s refresh / langchange)
+  if (document.activeElement !== $('search') && $('search').value.trim() !== state.query) $('search').value = state.query;
   $('searchClear').hidden = !state.query;
   renderGrid();
   renderCartBar();
@@ -1198,7 +1204,12 @@ function renderSuccess(o) {
   body.querySelector('[data-pay-card]')?.addEventListener('click', (e) => openRazorpay(o, e.currentTarget));
   body.querySelector('[data-rx]')?.addEventListener('click', () => sendOrderWhatsApp(o, `📎 Prescription for Order No ${o.orderNumber} attached below.`));
   body.querySelector('[data-wa]')?.addEventListener('click', () => sendOrderWhatsApp(o));
-  body.querySelector('[data-track]')?.addEventListener('click', () => { state.successOrder = null; ui.closeSheet(); location.hash = '#orders'; });
+  body.querySelector('[data-track]')?.addEventListener('click', () => {
+    state.successOrder = null;
+    ui.closeSheet();
+    if (state.route.name === 'orders') { renderOrders(true); syncOrders(); } // already there: no hashchange → refresh by hand
+    else location.hash = '#orders';
+  });
   body.querySelector('[data-continue]')?.addEventListener('click', () => { state.successOrder = null; ui.closeSheet(); if (state.route.name !== 'pharmacy') location.hash = '#pharmacy'; });
   body.querySelector('[data-signin]')?.addEventListener('click', openAccount);
 }
