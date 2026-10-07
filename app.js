@@ -213,13 +213,16 @@ export function router() {
     else a.removeAttribute('aria-current');
   });
   if (ui.currentSheet() && ui.currentSheet() !== 'sheetConfirm') ui.closeSheet();
-  if (r.name === 'home' && r.sub) {
-    requestAnimationFrame(() => $(r.sub)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  // '#home/<id>' and '#book/my' scroll to a section after showing the screen.
+  const anchor = r.name === 'home' ? r.sub : r.name === 'book' && r.sub === 'my' ? 'myApptsSec' : null;
+  if (anchor) {
+    requestAnimationFrame(() => $(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   } else if (prev.name !== r.name || !r.sub) {
     window.scrollTo({ top: 0 });
   }
   SCREEN_RENDER[r.name]?.();
   if (r.name === 'home') startQueuePoll(); else stopQueuePoll();
+  if (r.name === 'orders') syncOrders();
 }
 
 // ---------------- data loading ----------------
@@ -269,7 +272,7 @@ export function renderAll(langSwitch = false) {
   const typing = (id) => { const a = document.activeElement; return a && $(id)?.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName); };
   if (ui.currentSheet() === 'sheetCart' && !typing('sheetCart') && (langSwitch || !state.successOrder)) renderCart();
   if (ui.currentSheet() === 'sheetProduct' && !typing('sheetProduct')) renderProduct();
-  if (ui.currentSheet() === 'sheetAccount') renderAccount();
+  if (ui.currentSheet() === 'sheetAccount' && (langSwitch || !typing('sheetAccount'))) renderAccount();
 }
 
 // Title, brand, footer, FAB, quick-action links — anything outside a screen.
@@ -837,7 +840,7 @@ function renderReviews() {
   }));
   $('reviewBody')?.addEventListener('input', (e) => { state.reviewDraft.body = e.target.value; });
   host.querySelector('[data-submit-review]')?.addEventListener('click', submitReview);
-  host.querySelector('[data-signin-review]')?.addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
+  host.querySelector('[data-signin-review]')?.addEventListener('click', openAccount);
 }
 
 async function submitReview() {
@@ -1003,7 +1006,7 @@ export function renderCart() {
     ui.toast(t('cart.couponRemoved'), 'info');
     renderCart();
   });
-  body.querySelector('[data-signin]')?.addEventListener('click', () => { readForm(); renderAccount(); ui.openSheet('sheetAccount'); });
+  body.querySelector('[data-signin]')?.addEventListener('click', () => { readForm(); openAccount(); });
   $('placeBtn').addEventListener('click', placeOrder);
 }
 
@@ -1189,7 +1192,7 @@ function renderSuccess(o) {
   body.querySelector('[data-wa]')?.addEventListener('click', () => sendOrderWhatsApp(o));
   body.querySelector('[data-track]')?.addEventListener('click', () => { state.successOrder = null; ui.closeSheet(); location.hash = '#orders'; });
   body.querySelector('[data-continue]')?.addEventListener('click', () => { state.successOrder = null; ui.closeSheet(); if (state.route.name !== 'pharmacy') location.hash = '#pharmacy'; });
-  body.querySelector('[data-signin]')?.addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
+  body.querySelector('[data-signin]')?.addEventListener('click', openAccount);
 }
 
 // Book: "how it works" + my-appointments empty state; the form arrives in FEAT-005.
@@ -1211,46 +1214,469 @@ export function renderToken() {
   $('tokenForm').innerHTML = emptyState('🎫', t('token.intro'), t('token.note'));
 }
 
-// Orders: filter seg + empty state; full cards/sync arrive in FEAT-004.
-export function renderOrders() {
-  const list = state.orders;
-  $('ordersSync').textContent = '';
+// =====================================================================
+// MY ORDERS — sync via my_orders_status, status timeline, payments, bill
+// =====================================================================
+const ORDER_STEPS = ['placed', 'verified', 'packed', 'shipped', 'delivered'];
+const STEP_ICON = { placed: '🧾', verified: '✅', packed: '📦', shipped: '🛵', delivered: '🏠' };
+export const isActiveOrder = (o) => o.status !== 'delivered' && o.status !== 'cancelled';
+export const orderByNumber = (n) => state.orders.find((o) => o.orderNumber === n);
+const fmtDate = (iso, year = false) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', ...(year ? { year: 'numeric' } : {}) });
+};
+const orderQty = (o) => (o.items ?? []).reduce((a, it) => a + Number(it.qty || 0), 0);
+// Payment pill: paid/refunded from the server; cod when unpaid by cash; 'verifying'
+// only while the local "I have paid" claim is set and the server still says pending.
+function payState(o) {
+  if (o.payStatus === 'paid') return 'paid';
+  if (o.payStatus === 'refunded') return 'refunded';
+  if (o.payMethod === 'cod') return 'cod';
+  return o.claimed ? 'verifying' : 'pending';
+}
+const canPayAgain = (o) => o.payStatus === 'pending' && o.status !== 'cancelled' && o.payMethod !== 'cod';
+const canSwitchCod = (o) => o.payStatus === 'pending' && o.payMethod !== 'cod' && o.status !== 'delivered' && o.status !== 'cancelled';
+const canCancel = (o) => o.status === 'placed' || o.status === 'verified';
+
+// --- sync: on #orders show, on visibilitychange→visible and window focus (debounced 2 s)
+let syncing = false;
+let syncState = '';   // '' | 'syncing' | 'synced' | 'offline'
+function paintSync() {
+  const el = $('ordersSync');
+  el.textContent = syncState === 'syncing' ? t('orders.syncing') : syncState === 'synced' ? t('orders.synced') : syncState === 'offline' ? t('common.offline') : '';
+}
+export async function syncOrders() {
+  const active = state.orders.filter(isActiveOrder);
+  if (!active.length) { syncState = ''; paintSync(); return; }
+  if (syncing) return;
+  syncing = true;
+  syncState = 'syncing';
+  paintSync();
+  const { data, error } = await safe(db.rpc('my_orders_status', {
+    p_keys: active.slice(0, 50).map((o) => ({ order_number: o.orderNumber, phone: o.phone })),
+  }));
+  syncing = false;
+  if (error) { syncState = 'offline'; paintSync(); return; }
+  for (const r of Array.isArray(data) ? data : []) {
+    const o = orderByNumber(r.order_number);
+    if (!o) continue;
+    if (r.status) o.status = r.status;
+    if (r.payment_status) o.payStatus = r.payment_status;
+    if (r.payment_method) o.payMethod = r.payment_method;
+    if (r.subtotal != null) o.subtotal = Number(r.subtotal);
+    if (r.delivery_fee != null) o.deliveryFee = Number(r.delivery_fee);
+    if (r.discount != null) o.discount = Number(r.discount);
+    if (r.coupon_code !== undefined) o.couponCode = r.coupon_code ?? null;
+    if (r.total != null) o.total = Number(r.total);
+    if (Array.isArray(r.items) && r.items.length) {
+      o.items = r.items.map((it) => ({ medicineId: it.medicine_id, name: it.name, packSize: it.pack_size ?? '', price: Number(it.price), qty: Number(it.qty) }));
+    }
+    if (o.payStatus !== 'pending') { o.claimed = false; }
+  }
+  saveOrders();
+  syncState = 'synced';
+  paintSync();
+  if (state.route.name === 'orders') renderOrders();
+}
+const syncOrdersDebounced = ui.debounce(() => { if (state.route.name === 'orders') syncOrders(); }, 2000);
+
+// --- per-card UI state that must survive re-renders
+const expanded = new Set();     // order numbers with details open
+const claimOpen = new Set();    // order numbers with the "I have paid" ref box open
+const claimDraft = {};          // orderNumber → typed ref
+const typingIn = (id) => { const a = document.activeElement; return !!a && !!$(id)?.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName); };
+
+function timelineHtml(o) {
+  if (o.status === 'cancelled') return `<div class="timeline cancelled"><div class="tl-cancel">⛔ ${esc(t('orders.cancelledBanner'))}</div></div>`;
+  const cur = Math.max(0, ORDER_STEPS.indexOf(o.status));
+  return `<div class="timeline" role="list">${ORDER_STEPS.map((s, i) => {
+    const done = i <= cur;
+    const now = i === cur && o.status !== 'delivered';
+    return `<div class="tl-step ${done ? 'done' : ''} ${now ? 'now' : ''}" role="listitem" ${now ? 'aria-current="step"' : ''}>
+      <span class="tl-dot" aria-hidden="true">${done && !now ? '✓' : STEP_ICON[s]}</span>
+      <span class="tl-lbl">${esc(t(`orders.status.${s}`))}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function billHtml(o, cls = '') {
+  return `<dl class="bill ${cls}">
+    <div><dt>${esc(t('cart.itemsTotal'))}</dt><dd>${esc(inr(o.subtotal))}</dd></div>
+    <div><dt>${esc(t('cart.delivery'))}</dt><dd>${o.deliveryFee ? esc(inr(o.deliveryFee)) : `<span class="free">${esc(t('common.free'))}</span>`}</dd></div>
+    ${o.discount ? `<div class="disc"><dt>${esc(t('cart.discount'))}${o.couponCode ? ` <span class="muted">(${esc(o.couponCode)})</span>` : ''}</dt><dd>− ${esc(inr(o.discount))}</dd></div>` : ''}
+    <div class="total"><dt>${esc(t('cart.toPay'))}</dt><dd>${esc(inr(o.total))}</dd></div>
+  </dl>`;
+}
+const methodLabel = (m) => t(['upi', 'razorpay', 'cod'].includes(m) ? `orders.method.${m}` : 'orders.method.upi');
+const addressLine = (o) => [o.address, o.city, o.pincode].filter(Boolean).join(', ');
+
+function ocardHtml(o) {
+  const n = o.orderNumber;
+  const pay = payState(o);
+  const open = expanded.has(n);
+  const btn = (attr, cls, ico, label) => `<button type="button" class="btn ${cls} sm" ${attr}><span class="ico" aria-hidden="true">${ico}</span><span class="lbl">${esc(label)}</span></button>`;
+  const actions = [];
+  if (canPayAgain(o)) {
+    actions.push(btn('data-pay', 'btn-gold', o.payMethod === 'razorpay' ? '💳' : '📱', t('orders.payAgain', { amount: inr(o.total) })));
+    if (!o.claimed) actions.push(btn('data-claim', 'btn-ghost', '🧾', t('orders.iHavePaid')));
+  }
+  if (canSwitchCod(o)) actions.push(btn('data-cod', 'btn-ghost', '💵', t('orders.switchCod')));
+  if (state.settings?.whatsapp) actions.push(`<a class="btn btn-wa sm" href="${esc(waHref(t('orders.whatsappMsg', { order: n })))}" target="_blank" rel="noopener"><span class="ico" aria-hidden="true">💬</span><span class="lbl">${esc(t('orders.whatsapp'))}</span></a>`);
+  actions.push(btn('data-print', 'btn-ghost', '🖨️', t('orders.printBill')));
+  if ((o.items ?? []).some((it) => medById(it.medicineId))) actions.push(btn('data-reorder', 'btn-ghost', '🔁', t('orders.reorder')));
+  if (canCancel(o)) actions.push(btn('data-cancel', 'btn-ghost danger', '✕', t('orders.cancel')));
+  const claim = claimOpen.has(n) ? `<form class="claim" data-claim-form novalidate>
+      <label class="sr-only" for="ref-${esc(n)}">${esc(t('orders.refPlaceholder'))}</label>
+      <input id="ref-${esc(n)}" value="${esc(claimDraft[n] ?? '')}" placeholder="${esc(t('orders.refPlaceholder'))}" maxlength="60" autocomplete="off" data-autofocus>
+      <button type="submit" class="btn btn-teal sm"><span class="lbl">${esc(t('common.confirm'))}</span></button>
+      <button type="button" class="btn btn-ghost sm" data-claim-cancel><span class="lbl">${esc(t('common.cancel'))}</span></button>
+    </form>` : '';
+  return `<article class="card ocard" data-order="${esc(n)}">
+    <header class="ohead">
+      <div>
+        <div class="onum">${esc(n)}</div>
+        <div class="ometa"><span>${esc(t('orders.placedOn', { date: fmtDate(o.createdAt) }))}</span><span>·</span><span>${esc(t(orderQty(o) === 1 ? 'common.item' : 'common.items', { n: orderQty(o) }))}</span></div>
+      </div>
+      <div class="ototal">${esc(inr(o.total))}</div>
+    </header>
+    <div class="opills">
+      <span class="pill pill-${esc(o.status)}">${esc(t(ORDER_STEPS.includes(o.status) || o.status === 'cancelled' ? `orders.status.${o.status}` : 'orders.status.placed'))}</span>
+      <span class="pill pill-${pay}">${esc(t(`orders.pay.${pay}`))}</span>
+    </div>
+    ${timelineHtml(o)}
+    ${canPayAgain(o) && !o.claimed ? `<p class="muted hint left">${esc(t('orders.notPaidYet'))}</p>` : ''}
+    <div class="oactions">${actions.join('')}</div>
+    ${claim}
+    <button type="button" class="btn btn-link sm otoggle" data-toggle aria-expanded="${open}" aria-controls="od-${esc(n)}">${esc(t(open ? 'orders.hide' : 'orders.details'))} ${open ? '▴' : '▾'}</button>
+    <div class="odetails" id="od-${esc(n)}" ${open ? '' : 'hidden'}>
+      <div>
+        <div class="osub">${esc(t('orders.items'))}</div>
+        <ul class="oitems">${(o.items ?? []).map((it) => `<li><span><b>${esc(it.name)}</b>${it.packSize ? ` <span class="muted">· ${esc(it.packSize)}</span>` : ''}<br><span class="muted">${esc(inr(it.price))} × ${esc(it.qty)}</span></span><b>${esc(inr(Number(it.price) * Number(it.qty)))}</b></li>`).join('')}</ul>
+      </div>
+      <div><div class="osub">${esc(t('orders.bill'))}</div>${billHtml(o)}</div>
+      <div><div class="osub">${esc(t('orders.paymentLabel'))}</div><div class="oaddr">${esc(methodLabel(o.payMethod))} · ${esc(t(`orders.pay.${pay}`))}</div></div>
+      <div><div class="osub">${esc(t('orders.deliverTo'))}</div><div class="oaddr"><b>${esc(o.name)}</b> · ${esc(o.phone)}<br>${esc(addressLine(o))}</div></div>
+    </div>
+  </article>`;
+}
+
+export function renderOrders(force = false) {
+  paintSync();
+  const seg = $('ordersFilter');
+  setSegValue(seg, 'filter', state.ordersFilter);
   const el = $('ordersList');
+  if (!force && typingIn('ordersList')) return; // keep the caret in the "I have paid" ref box
+  const list = state.orders;
   if (!list.length) {
+    seg.hidden = true;
     el.innerHTML = emptyState('📦', t('orders.empty'), t('orders.emptySub'),
       `<a class="btn btn-teal" href="#pharmacy"><span class="lbl">${esc(t('cart.browse'))}</span></a>`);
     return;
   }
-  const active = (o) => o.status !== 'delivered' && o.status !== 'cancelled';
-  const shown = list.filter((o) => state.ordersFilter === 'all' ? true : state.ordersFilter === 'active' ? active(o) : !active(o));
-  el.innerHTML = shown.map((o) => `<article class="card ocard" style="padding:16px;margin-bottom:12px;display:flex;justify-content:space-between;gap:12px;align-items:center">
-      <div><b>${esc(o.orderNumber)}</b><div class="muted" style="font-size:var(--fs-sm)">${esc(t('orders.placedOn', { date: new Date(o.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) }))} · ${inr(o.total)}</div></div>
-      <span class="pill pill-${esc(o.status)}">${esc(t(`orders.status.${o.status}`))}</span>
-    </article>`).join('') || emptyState('📦', t('orders.empty'));
+  seg.hidden = false;
+  const shown = list.filter((o) => (state.ordersFilter === 'all' ? true : state.ordersFilter === 'active' ? isActiveOrder(o) : !isActiveOrder(o)));
+  if (!shown.length) { el.innerHTML = emptyState('📦', t('orders.empty')); return; }
+  el.innerHTML = `<div class="olist">${shown.map(ocardHtml).join('')}</div>`;
+  el.querySelectorAll('.ocard').forEach((card) => {
+    const o = orderByNumber(card.dataset.order);
+    if (!o) return;
+    card.querySelector('[data-toggle]').addEventListener('click', () => {
+      if (expanded.has(o.orderNumber)) expanded.delete(o.orderNumber); else expanded.add(o.orderNumber);
+      renderOrders();
+    });
+    card.querySelector('[data-pay]')?.addEventListener('click', (e) => payOrder(o, e.currentTarget));
+    card.querySelector('[data-claim]')?.addEventListener('click', () => { claimOpen.add(o.orderNumber); renderOrders(); $(`ref-${o.orderNumber}`)?.focus(); });
+    card.querySelector('[data-claim-cancel]')?.addEventListener('click', () => { claimOpen.delete(o.orderNumber); renderOrders(); });
+    card.querySelector(`#ref-${CSS.escape(o.orderNumber)}`)?.addEventListener('input', (e) => { claimDraft[o.orderNumber] = e.target.value; });
+    card.querySelector('[data-claim-form]')?.addEventListener('submit', (e) => { e.preventDefault(); claimPaid(o, e.currentTarget.querySelector('[type="submit"]')); });
+    card.querySelector('[data-cod]')?.addEventListener('click', (e) => switchToCod(o, e.currentTarget));
+    card.querySelector('[data-cancel]')?.addEventListener('click', (e) => cancelOrder(o, e.currentTarget));
+    card.querySelector('[data-print]')?.addEventListener('click', () => printBill(o));
+    card.querySelector('[data-reorder]')?.addEventListener('click', () => reorder(o));
+  });
 }
 
-// Account sheet: FEAT-007 adds the sign-in flows; today shows session state only.
+// --- actions
+function payOrder(o, btn) {
+  if (o.payMethod === 'razorpay') { openRazorpay(o, btn); return; }
+  ui.toast(t('pay.opening'), 'info', 2000);
+  payUpi(o);
+}
+
+async function claimPaid(o, btn) {
+  const ref = (claimDraft[o.orderNumber] ?? '').trim().slice(0, 60);
+  btn?.setAttribute('aria-busy', 'true');
+  const { error } = await safe(db.rpc('claim_order_paid', { p_order_number: o.orderNumber, p_phone: o.phone, p_ref: ref || null }));
+  btn?.removeAttribute('aria-busy');
+  if (error) { ui.toast(error.message || t('orders.claimFailed'), 'err'); return; }
+  o.claimed = true;
+  o.claimedRef = ref || null;
+  saveOrders();
+  claimOpen.delete(o.orderNumber);
+  delete claimDraft[o.orderNumber];
+  ui.toast(t('orders.claimSent'), 'ok');
+  renderOrders(true);
+}
+
+async function switchToCod(o, btn) {
+  const ok = await ui.confirm({ title: t('orders.switchCod'), body: t('orders.switchCodConfirm', { amount: inr(o.total) }), ok: t('common.yes'), cancel: t('common.no') });
+  if (!ok) return;
+  btn?.setAttribute('aria-busy', 'true');
+  const { error } = await safe(db.rpc('set_my_payment_method', { p_order_number: o.orderNumber, p_phone: o.phone, p_method: 'cod' }));
+  btn?.removeAttribute('aria-busy');
+  if (error) { ui.toast(error.message || t('orders.switchFailed'), 'err'); return; }
+  o.payMethod = 'cod';
+  o.claimed = false;
+  saveOrders();
+  ui.toast(t('orders.switchedCod'), 'ok');
+  renderOrders();
+  if (state.settings?.whatsapp) {
+    // Optional: let the hospital know on WhatsApp.
+    const tell = await ui.confirm({ title: t('orders.switchedCod'), body: t('orders.codMsg', { order: o.orderNumber }), ok: t('common.whatsapp'), cancel: t('common.close') });
+    if (tell) ui.openExternal(waHref(t('orders.codMsg', { order: o.orderNumber })));
+  }
+}
+
+async function cancelOrder(o, btn) {
+  const ok = await ui.confirm({ title: t('orders.cancel'), body: t('orders.cancelConfirm', { order: o.orderNumber }), ok: t('orders.cancel'), cancel: t('common.keep'), danger: true });
+  if (!ok) return;
+  btn?.setAttribute('aria-busy', 'true');
+  const { error } = await safe(db.rpc('cancel_my_order', { p_order_number: o.orderNumber, p_phone: o.phone }));
+  btn?.removeAttribute('aria-busy');
+  if (error) { ui.toast(error.message || t('orders.cancelFailed'), 'err', 5000); return; }
+  o.status = 'cancelled';
+  saveOrders();
+  ui.toast(t('orders.cancelled'), 'ok');
+  renderOrders();
+}
+
+// Printable bill: fill #printArea (print CSS hides everything else) and print.
+export function printBill(o) {
+  const s = state.settings ?? {};
+  const pay = payState(o);
+  $('printArea').innerHTML = `<div class="pbill">
+    <div class="pb-head">
+      <h1>${esc(hospitalName())}</h1>
+      <p>${esc([s.address, s.phone].filter(Boolean).join(' · '))}</p>
+    </div>
+    <h2>${esc(t('orders.bill'))}</h2>
+    <div class="meta">
+      <div><b>${esc(t('orders.orderNo'))}</b><br>${esc(o.orderNumber)}</div>
+      <div><b>${esc(t('orders.date'))}</b><br>${esc(fmtDate(o.createdAt, true))}</div>
+      <div><b>${esc(t('orders.customer'))}</b><br>${esc(o.name)}<br>${esc(o.phone)}<br>${esc(addressLine(o))}</div>
+      <div><b>${esc(t('orders.paymentLabel'))}</b><br>${esc(methodLabel(o.payMethod))}<br>${esc(t(`orders.pay.${pay}`))}</div>
+    </div>
+    <table>
+      <thead><tr><th>${esc(t('orders.items'))}</th><th class="num">${esc(t('cart.qty'))}</th><th class="num">₹</th><th class="num">${esc(t('cart.total'))}</th></tr></thead>
+      <tbody>${(o.items ?? []).map((it) => `<tr><td>${esc(it.name)}${it.packSize ? `<br><small>${esc(it.packSize)}</small>` : ''}</td><td class="num">${esc(it.qty)}</td><td class="num">${esc(inr(it.price))}</td><td class="num">${esc(inr(Number(it.price) * Number(it.qty)))}</td></tr>`).join('')}</tbody>
+    </table>
+    <div class="tot">
+      <div>${esc(t('cart.itemsTotal'))}: ${esc(inr(o.subtotal))}</div>
+      <div>${esc(t('cart.delivery'))}: ${o.deliveryFee ? esc(inr(o.deliveryFee)) : esc(t('common.free'))}</div>
+      ${o.discount ? `<div>${esc(t('cart.discount'))}${o.couponCode ? ` (${esc(o.couponCode)})` : ''}: − ${esc(inr(o.discount))}</div>` : ''}
+      <div><b>${esc(t('cart.toPay'))}: ${esc(inr(o.total))}</b></div>
+    </div>
+    <p class="thanks">${esc(t('orders.thankYou'))} 🙏</p>
+  </div>`;
+  window.print();
+}
+
+// Reorder: add each item to the cart, clamped to the current stock, then open the cart.
+function reorder(o) {
+  let added = 0;
+  for (const it of o.items ?? []) {
+    const m = medById(it.medicineId);
+    if (!m) continue;
+    const next = Math.min(stockOf(m), qtyOf(m.id) + Number(it.qty || 0));
+    if (next <= 0) continue;
+    if (next !== qtyOf(m.id)) { state.cart[m.id] = next; added++; }
+    repaintActions(m.id);
+  }
+  if (!added) { ui.toast(t('shop.outOfStock'), 'err'); return; }
+  saveCart();
+  renderCartBadge(true);
+  renderCartBar();
+  ui.toast(t('orders.reordered'), 'ok');
+  openCart();
+}
+
+// =====================================================================
+// ACCOUNT SHEET (#sheetAccount) — Google / email code / password; signed-in panel
+// =====================================================================
+// Form draft survives re-renders (60s refresh, langchange); reset on sign-in/out.
+const auth = { mode: 'code', step: 'email', email: '', code: '', password: '', newPassword: '', errors: {}, busy: false };
+const resetAuth = () => { Object.assign(auth, { step: 'email', code: '', password: '', newPassword: '', errors: {}, busy: false }); };
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function openAccount() {
+  renderAccount();
+  ui.openSheet('sheetAccount');
+}
+
 export function renderAccount() {
   const body = $('accountBody');
   const s = state.session;
   $('sheetAccountTitle').textContent = t(s ? 'account.title' : 'auth.title');
-  if (s) {
-    body.innerHTML = `<div class="card" style="padding:16px;text-align:center;margin-bottom:12px">
-        <div style="font-size:30px" aria-hidden="true">🙏</div>
-        <div class="muted" style="font-size:var(--fs-xs)">${esc(t('account.signedInAs'))}</div>
-        <b>${esc(s.user.email ?? s.user.phone ?? '')}</b>
-        <p class="muted" style="font-size:var(--fs-sm);margin-top:6px">${esc(t('account.sameApp'))}</p>
+  if (s) { renderSignedIn(body, s); return; }
+  const err = (k) => (auth.errors[k] ? `<div class="field-err" role="alert">${esc(t(auth.errors[k]))}</div>` : '<div class="field-err"></div>');
+  const field = (k, id, label, type, extra = '') => `<div class="field ${auth.errors[k] ? 'invalid' : ''}">
+      <label for="${id}">${esc(label)}</label>
+      <input id="${id}" type="${type}" value="${esc(auth[k])}" ${extra}>
+      ${err(k)}
+    </div>`;
+  const busy = auth.busy ? 'aria-busy="true"' : '';
+  let form;
+  if (auth.step === 'code') {
+    form = `
+      <p class="sent"><span class="ico" aria-hidden="true">📨</span> ${esc(t('auth.codeSent', { email: auth.email }))}</p>
+      <p class="muted hint">${esc(t('auth.codeHint'))}</p>
+      ${field('code', 'authCode', t('auth.code'), 'text', `class="code-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="••••••" data-autofocus`)}
+      <button type="submit" class="btn btn-teal block" ${busy}><span class="lbl">${esc(t(auth.busy ? 'auth.verifying' : 'auth.verify'))}</span></button>
+      <div class="btn-row two">
+        <button type="button" class="btn btn-ghost" data-resend><span class="lbl">${esc(t('auth.resend'))}</span></button>
+        <button type="button" class="btn btn-ghost" data-change-email><span class="lbl">${esc(t('auth.changeEmail'))}</span></button>
+      </div>`;
+  } else {
+    form = `
+      ${field('email', 'authEmail', t('auth.email'), 'email', `placeholder="${esc(t('auth.emailPlaceholder'))}" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false"`)}
+      <div class="seg seg-block" id="authMode" role="radiogroup" aria-label="${esc(t('auth.title'))}">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button type="button" class="seg-btn" role="radio" aria-checked="${auth.mode === 'code'}" data-mode="code">${esc(t('auth.modeCode'))}</button>
+        <button type="button" class="seg-btn" role="radio" aria-checked="${auth.mode === 'password'}" data-mode="password">${esc(t('auth.modePassword'))}</button>
       </div>
-      <a class="btn btn-ghost block" href="#orders"><span class="ico" aria-hidden="true">📦</span><span class="lbl">${esc(t('account.myOrders'))}</span></a>
-      <button type="button" class="btn btn-link block" data-signout style="margin-top:8px">${esc(t('account.signOut'))}</button>`;
-    body.querySelector('[data-signout]').addEventListener('click', async () => {
-      await db.auth.signOut();
-      ui.toast(t('account.signedOut'), 'ok');
-      ui.closeSheet();
-    });
-    return;
+      ${auth.mode === 'password'
+        ? `${field('password', 'authPassword', t('auth.password'), 'password', 'autocomplete="current-password" minlength="6"')}
+           <button type="submit" class="btn btn-teal block" ${busy}><span class="lbl">${esc(t('auth.signInBtn'))}</span></button>`
+        : `<button type="submit" class="btn btn-teal block" ${busy}><span class="lbl">${esc(t(auth.busy ? 'auth.sending' : 'auth.sendCode'))}</span></button>`}
+      <p class="muted hint">${esc(t('auth.newHere'))}</p>`;
   }
-  body.innerHTML = emptyState('👤', t('auth.title'), t('auth.sub'));
+  body.innerHTML = `<div class="auth">
+    <p class="sub">${esc(t('auth.sub'))}</p>
+    <button type="button" class="btn btn-ghost block btn-google" data-google>
+      <svg class="g-logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.5 30.2 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.8 6.1C12.4 13.4 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/><path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.8-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.3 0-11.6-4-13.5-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
+      <span class="lbl">${esc(t('auth.google'))}</span>
+    </button>
+    <div class="or"><span>${esc(t('auth.orEmail'))}</span></div>
+    <form id="authForm" novalidate>${form}</form>
+  </div>`;
+
+  // wiring
+  body.querySelector('[data-google]').addEventListener('click', signInGoogle);
+  $('authEmail')?.addEventListener('input', (e) => { auth.email = e.target.value; clearAuthErr('email', e.target); });
+  $('authPassword')?.addEventListener('input', (e) => { auth.password = e.target.value; clearAuthErr('password', e.target); });
+  $('authCode')?.addEventListener('input', (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); auth.code = e.target.value; clearAuthErr('code', e.target); });
+  const seg = $('authMode');
+  if (seg) initSeg(seg, (b) => { auth.mode = b.dataset.mode; auth.errors = {}; renderAccount(); $('authEmail')?.focus(); });
+  $('authForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (auth.step === 'code') verifyCode();
+    else if (auth.mode === 'password') signInPassword();
+    else sendCode();
+  });
+  body.querySelector('[data-resend]')?.addEventListener('click', sendCode);
+  body.querySelector('[data-change-email]')?.addEventListener('click', () => { auth.step = 'email'; auth.code = ''; auth.errors = {}; renderAccount(); $('authEmail')?.focus(); });
+}
+function clearAuthErr(k, input) {
+  if (!auth.errors[k]) return;
+  delete auth.errors[k];
+  const f = input.closest('.field');
+  f?.classList.remove('invalid');
+  const e = f?.querySelector('.field-err');
+  if (e) e.textContent = '';
+}
+function setAuthBusy(v) { auth.busy = v; if (ui.currentSheet() === 'sheetAccount') renderAccount(); }
+
+async function signInGoogle() {
+  const { error } = await safe(db.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } }));
+  if (error) ui.toast(t('auth.googleFailed'), 'err');
+}
+async function sendCode() {
+  if (auth.busy) return;
+  const email = auth.email.trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) { auth.errors.email = 'auth.errEmail'; renderAccount(); $('authEmail')?.focus(); return; }
+  auth.email = email;
+  setAuthBusy(true);
+  const { error } = await safe(db.auth.signInWithOtp({ email, options: { shouldCreateUser: true } }));
+  auth.busy = false;
+  if (error) { ui.toast(error.message || t('auth.failed'), 'err', 5000); renderAccount(); return; }
+  auth.step = 'code';
+  auth.code = '';
+  auth.errors = {};
+  renderAccount();
+  ui.toast(t('auth.codeSent', { email }), 'ok');
+  $('authCode')?.focus();
+}
+async function verifyCode() {
+  if (auth.busy) return;
+  const token = auth.code.trim();
+  if (!/^\d{6}$/.test(token)) { auth.errors.code = 'auth.errCode'; renderAccount(); $('authCode')?.focus(); return; }
+  setAuthBusy(true);
+  const { error } = await safe(db.auth.verifyOtp({ email: auth.email, token, type: 'email' }));
+  auth.busy = false;
+  if (error) { ui.toast(error.message || t('auth.failed'), 'err', 5000); renderAccount(); $('authCode')?.focus(); return; }
+  ui.toast(t('auth.welcome'), 'ok');
+  resetAuth(); // onAuthStateChange → paintAuth re-renders the signed-in panel
+}
+async function signInPassword() {
+  if (auth.busy) return;
+  const email = auth.email.trim().toLowerCase();
+  auth.errors = {};
+  if (!EMAIL_RE.test(email)) auth.errors.email = 'auth.errEmail';
+  if (auth.password.length < 6) auth.errors.password = 'auth.errPassword';
+  if (Object.keys(auth.errors).length) { renderAccount(); $(auth.errors.email ? 'authEmail' : 'authPassword')?.focus(); return; }
+  auth.email = email;
+  setAuthBusy(true);
+  const { error } = await safe(db.auth.signInWithPassword({ email, password: auth.password }));
+  auth.busy = false;
+  if (error) { ui.toast(error.message || t('auth.failed'), 'err', 5000); renderAccount(); return; }
+  ui.toast(t('auth.welcome'), 'ok');
+  resetAuth();
+}
+
+function renderSignedIn(body, s) {
+  const who = s.user.email ?? s.user.phone ?? '';
+  body.innerHTML = `<div class="auth">
+    <div class="acct-head">
+      <span class="ico" aria-hidden="true">🙏</span>
+      <span class="muted">${esc(t('account.signedInAs'))}</span>
+      <b>${esc(who)}</b>
+      <p class="muted hint">${esc(t('account.sameApp'))}</p>
+    </div>
+    <div class="menu-list">
+      <a class="menu-item" href="#orders" data-close-sheet><span class="ico" aria-hidden="true">📦</span><span>${esc(t('account.myOrders'))}</span><span class="chev" aria-hidden="true">›</span></a>
+      <a class="menu-item" href="#book/my" data-close-sheet><span class="ico" aria-hidden="true">📅</span><span>${esc(t('account.myAppointments'))}</span><span class="chev" aria-hidden="true">›</span></a>
+    </div>
+    <div class="divider"></div>
+    <form id="pwForm" novalidate>
+      <div class="field ${auth.errors.newPassword ? 'invalid' : ''}">
+        <label for="newPassword">${esc(t('account.setPassword'))}</label>
+        <input id="newPassword" type="password" value="${esc(auth.newPassword)}" placeholder="${esc(t('account.newPassword'))}" autocomplete="new-password" minlength="6">
+        <div class="field-err" role="alert">${esc(auth.errors.newPassword ? t(auth.errors.newPassword) : '')}</div>
+      </div>
+      <button type="submit" class="btn btn-ghost block" ${auth.busy ? 'aria-busy="true"' : ''}><span class="ico" aria-hidden="true">🔑</span><span class="lbl">${esc(t('account.savePassword'))}</span></button>
+    </form>
+    <button type="button" class="btn btn-link block" data-signout><span class="lbl">${esc(t('account.signOut'))}</span></button>
+  </div>`;
+  $('newPassword').addEventListener('input', (e) => { auth.newPassword = e.target.value; clearAuthErr('newPassword', e.target); });
+  $('pwForm').addEventListener('submit', (e) => { e.preventDefault(); savePassword(); });
+  body.querySelector('[data-signout]').addEventListener('click', async () => {
+    await safe(db.auth.signOut());
+    resetAuth();
+    ui.toast(t('account.signedOut'), 'ok');
+    ui.closeSheet();
+  });
+}
+async function savePassword() {
+  if (auth.busy) return;
+  if (auth.newPassword.length < 6) { auth.errors.newPassword = 'auth.errPassword'; renderAccount(); $('newPassword')?.focus(); return; }
+  setAuthBusy(true);
+  const { error } = await safe(db.auth.updateUser({ password: auth.newPassword }));
+  auth.busy = false;
+  if (error) { ui.toast(error.message || t('account.passwordFailed'), 'err', 5000); renderAccount(); return; }
+  auth.newPassword = '';
+  ui.toast(t('account.passwordSaved'), 'ok');
+  renderAccount();
 }
 
 // ---------------- auth state ----------------
@@ -1260,7 +1686,12 @@ function paintAuth() {
   if (ui.currentSheet() === 'sheetProduct') renderReviews();   // write-review block depends on session
   if (ui.currentSheet() === 'sheetCart') renderCart();         // sign-in nudge
 }
-db.auth.onAuthStateChange((_e, s) => { state.session = s; paintAuth(); renderBook(); });
+db.auth.onAuthStateChange((e, s) => {
+  state.session = s;
+  if (e === 'SIGNED_IN' || e === 'SIGNED_OUT') resetAuth();
+  paintAuth();
+  renderBook();
+});
 db.auth.getSession().then(({ data }) => { state.session = data.session; paintAuth(); });
 
 // ---------------- wiring ----------------
@@ -1273,8 +1704,8 @@ function initChrome() {
 
   $('cartBtn').addEventListener('click', openCart);
   $('cartBtnBar').addEventListener('click', openCart);
-  $('accountBtn').addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
-  $('menuAccount').addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
+  $('accountBtn').addEventListener('click', openAccount);
+  $('menuAccount').addEventListener('click', openAccount);
   $('menuBtn').addEventListener('click', () => ui.openSheet('sheetMenu'));
 
   // links inside sheets that navigate: close the sheet first
@@ -1283,7 +1714,7 @@ function initChrome() {
     if (a) ui.closeSheet();
   });
 
-  // orders filter seg (state only; FEAT-004 renders the list)
+  // orders filter seg (All · Active · Past)
   const seg = $('ordersFilter');
   initSeg(seg, (b) => { state.ordersFilter = b.dataset.filter; setSegValue(seg, 'filter', b.dataset.filter); renderOrders(); });
 
@@ -1311,5 +1742,6 @@ onLangChange(() => {
 window.addEventListener('hashchange', router);
 setInterval(loadAll, 60_000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { loadAll(); if (state.route.name === 'home') loadQueue(); }
+  if (document.visibilityState === 'visible') { loadAll(); if (state.route.name === 'home') loadQueue(); syncOrdersDebounced(); }
 });
+window.addEventListener('focus', syncOrdersDebounced);
