@@ -196,12 +196,13 @@ export function parseHash() {
   const [name, sub] = path.split('/');
   return { name: SCREENS.includes(name) ? name : 'home', sub: sub || null, params: parseQuery(qs) };
 }
+// force=true (langchange) re-renders even while the user is typing in a form.
 const SCREEN_RENDER = {
   home: () => renderHome(),
   pharmacy: () => renderPharmacy(),
-  book: () => renderBook(),
-  token: () => renderToken(),
-  orders: () => renderOrders(),
+  book: (force) => renderBook(force),
+  token: (force) => renderToken(force),
+  orders: (force) => renderOrders(force),
 };
 export function router() {
   const r = parseHash();
@@ -220,6 +221,10 @@ export function router() {
   } else if (prev.name !== r.name || !r.sub) {
     window.scrollTo({ top: 0 });
   }
+  // '#book?doctor=<id>' / '#token?doctor=<id>' preselect the doctor (once per navigation).
+  const doc = r.params.get('doctor');
+  if (doc && r.name === 'book') { bk.doctorId = doc; bk.success = false; delete bk.errors.doctor; }
+  if (doc && r.name === 'token') { tk.doctorId = doc; delete tk.errors.doctor; }
   SCREEN_RENDER[r.name]?.();
   if (r.name === 'home') startQueuePoll(); else stopQueuePoll();
   if (r.name === 'orders') syncOrders();
@@ -250,6 +255,7 @@ export async function loadAll() {
   if (failed && !errorToasted) { errorToasted = true; ui.toast(t('common.errorGeneric'), 'err'); }
   if (!failed || state.settings) state.loaded = true;
   renderAll();
+  if (!queueFetched) loadQueue(); // first boot: doctors arrive after router() already tried the widget
 }
 
 function renderSkeletons() {
@@ -268,7 +274,7 @@ export function renderAll(langSwitch = false) {
   renderChrome();
   renderCartBadge();
   renderCartBar();
-  SCREEN_RENDER[state.route.name]?.();
+  SCREEN_RENDER[state.route.name]?.(langSwitch);
   const typing = (id) => { const a = document.activeElement; return a && $(id)?.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName); };
   if (ui.currentSheet() === 'sheetCart' && !typing('sheetCart') && (langSwitch || !state.successOrder)) renderCart();
   if (ui.currentSheet() === 'sheetProduct' && !typing('sheetProduct')) renderProduct();
@@ -503,8 +509,10 @@ function renderContact() {
 // --- live OPD queue widget (home) — queue_status per doctor, 30s while home + tab visible
 let queueTimer = null;
 let queueData = {}; // doctorId -> { serving_no, last_issued, waiting_count }
+let queueFetched = false; // at least one successful pass (doctors were known)
 async function loadQueue() {
   if (!state.doctors.length || document.hidden || state.route.name !== 'home') return;
+  queueFetched = true;
   const next = {};
   await Promise.all(state.doctors.map(async (d) => {
     try {
@@ -1195,23 +1203,642 @@ function renderSuccess(o) {
   body.querySelector('[data-signin]')?.addEventListener('click', openAccount);
 }
 
-// Book: "how it works" + my-appointments empty state; the form arrives in FEAT-005.
-export function renderBook() {
-  $('bookForm').innerHTML = '';
-  $('bookHow').innerHTML = `<div class="card" style="padding:20px">
-    <h3 style="font-family:var(--font-ui);font-size:var(--fs-md);margin-bottom:12px">${esc(t('book.howTitle'))}</h3>
-    ${['📋', '💬', '🏥'].map((ico, i) => `<div style="display:flex;gap:12px;align-items:center;min-height:40px"><span class="ico" aria-hidden="true" style="font-size:22px">${ico}</span><span>${esc(t(`book.how${i + 1}`))}</span></div>`).join('')}
-  </div>`;
-  const appts = state.appts;
-  $('myAppts').innerHTML = appts.length
-    ? '' // FEAT-005 renders appointment cards
-    : emptyState('📅', state.session ? t('book.empty') : t('book.signInToSee'), state.session ? t('book.emptySub') : '');
+// =====================================================================
+// SHARED: doctor radio list (book + token), date helpers
+// =====================================================================
+const docById = (id) => state.doctors.find((d) => String(d.id) === String(id));
+const typingInEl = (id) => { const a = document.activeElement; return !!a && !!$(id)?.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
+// 'Mon, 3 Jun' style for appointment dates (local parse — 'YYYY-MM-DD' alone would be UTC).
+const fmtDay = (iso, weekday = true) => {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return String(iso ?? '');
+  return d.toLocaleDateString('en-IN', { ...(weekday ? { weekday: 'short' } : {}), day: 'numeric', month: 'short' });
+};
+const fmtTime = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+};
+const fee = (type) => Number((type === 'online' ? state.settings?.fee_online : state.settings?.fee_offline) ?? 0);
+
+// Radio cards for doctor choice. `group` names the radio set; data-doc-pick on labels.
+function doctorRadiosHtml(group, selectedId, errKey) {
+  if (!state.loaded) return ui.skeleton('line', 3);
+  if (!state.doctors.length) return emptyState('🧑‍⚕️', t('home.noDoctors'));
+  return `<div class="dpick" role="radiogroup">${state.doctors.map((d) => {
+    const on = String(d.id) === String(selectedId ?? '');
+    return `<label class="card dradio ${on ? 'on' : ''}">
+      <input type="radio" name="${group}" value="${esc(d.id)}" ${on ? 'checked' : ''}>
+      <span class="avatar sm" aria-hidden="true">${d.image_url ? `<img src="${esc(d.image_url)}" alt="" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</span>
+      <span class="dtxt"><b>${esc(d.name)}</b><small>${esc(d.specialty ?? '')}</small></span>
+      <span class="pcheck" aria-hidden="true"></span>
+    </label>`;
+  }).join('')}</div>
+  <div class="field-err" role="alert">${esc(errKey ? t(errKey) : '')}</div>`;
 }
 
-// Token: intro + note; form/live card arrive in FEAT-006.
-export function renderToken() {
+// =====================================================================
+// BOOK — 3-step appointment form, success card, My Appointments
+// =====================================================================
+// Draft survives re-renders (60 s refresh, langchange). name/phone null = untouched → profile prefill.
+const bk = { doctorId: null, service: null, type: 'offline', date: '', time: '', name: null, phone: null, notes: '', errors: {}, busy: false, success: false };
+const bkName = () => (bk.name ?? state.profile.name ?? '');
+const bkPhone = () => (bk.phone ?? state.profile.phone ?? '');
+const bkService = () => bk.service ?? t('book.generalConsult');
+
+// Server rows for the signed-in user, cached per uid.
+const myAppts = { uid: null, rows: null, loading: false, error: false };
+async function loadMyAppts(force = false) {
+  const uid = state.session?.user?.id;
+  if (!uid) { myAppts.uid = null; myAppts.rows = null; return; }
+  if (!force && myAppts.uid === uid && (myAppts.rows || myAppts.loading)) return;
+  myAppts.uid = uid;
+  myAppts.loading = true;
+  myAppts.error = false;
+  renderMyAppts();
+  const { data, error } = await safe(db.from('appointments').select('*').eq('user_id', uid).order('appointment_date', { ascending: false }).limit(50));
+  myAppts.loading = false;
+  if (myAppts.uid !== uid) return; // signed out / switched meanwhile
+  if (error) { myAppts.error = true; myAppts.rows = myAppts.rows ?? []; }
+  else myAppts.rows = data ?? [];
+  if (state.route.name === 'book') renderMyAppts();
+}
+
+// Staff-facing WhatsApp appointment request (English on purpose — same format as the old site/app).
+function buildAppointmentMessage(a) {
+  const L = [];
+  L.push(`🩺 *Appointment Request — ${hospitalName()}* (website)`);
+  L.push('');
+  L.push(`Doctor: *${a.doctorName}*`);
+  L.push(`Service: ${a.service}`);
+  L.push(`Type: ${a.consultType === 'online' ? 'Online (video)' : 'In-person visit'}`);
+  L.push(`Date: ${a.date}`);
+  L.push(`Time: ${a.time}`);
+  L.push(`Fee: ${inr(a.fee)}`);
+  if (a.notes) L.push(`Notes: ${a.notes}`);
+  L.push('');
+  L.push(`👤 Patient: ${a.patientName}`);
+  L.push(`📞 ${a.phone}`);
+  return L.join('\n');
+}
+
+export function renderBook(force = false) {
+  if (force || !typingInEl('bookForm')) renderBookForm();
+  renderBookHow();
+  loadMyAppts();
+  renderMyAppts();
+}
+
+function renderBookHow() {
+  const s = state.settings;
+  const row = (ico, txt) => `<div class="hrow"><span class="ico" aria-hidden="true">${ico}</span><span>${esc(txt)}</span></div>`;
+  $('bookHow').innerHTML = `<div class="bhow">
+    <div class="card hcard">
+      <h3>${esc(t('book.howTitle'))}</h3>
+      ${row('📋', t('book.how1'))}${row('💬', t('book.how2'))}${row('🏥', t('book.how3'))}
+    </div>
+    <div class="card hcard">
+      <h3>${esc(t('book.fees'))}</h3>
+      <dl class="bill compact">
+        <div><dt>${esc(t('book.inPerson'))}</dt><dd>${esc(inr(fee('offline')))}</dd></div>
+        <div><dt>${esc(t('book.online'))}</dt><dd>${esc(inr(fee('online')))}</dd></div>
+      </dl>
+      ${s?.phone ? `<a class="btn btn-ghost sm" href="${esc(telHref(s.phone))}"><span class="ico" aria-hidden="true">📞</span><span class="lbl">${esc(t('book.callInstead'))}</span></a>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderBookForm() {
+  const el = $('bookForm');
+  if (bk.success) {
+    el.innerHTML = `<div class="card success bsuccess">
+      <div class="tick" aria-hidden="true"><svg viewBox="0 0 52 52"><circle class="tick-c" cx="26" cy="26" r="24"/><path class="tick-p" d="M14 27l8 8 16-16"/></svg></div>
+      <h3>${esc(t('book.success'))}</h3>
+      <p class="muted">${esc(t('book.successSub'))}</p>
+      <div class="btn-row two">
+        <a class="btn btn-teal" href="#book/my" data-book-my><span class="ico" aria-hidden="true">📅</span><span class="lbl">${esc(t('book.my'))}</span></a>
+        <button type="button" class="btn btn-ghost" data-book-again><span class="ico" aria-hidden="true">＋</span><span class="lbl">${esc(t('book.submit'))}</span></button>
+      </div>
+    </div>`;
+    const again = () => { bk.success = false; bk.date = ''; bk.time = ''; bk.notes = ''; renderBookForm(); };
+    el.querySelector('[data-book-my]').addEventListener('click', again);
+    el.querySelector('[data-book-again]').addEventListener('click', () => { again(); window.scrollTo({ top: 0 }); });
+    return;
+  }
+  const e = bk.errors;
+  const step = (n, key) => `<div class="bstep"><span class="bnum" aria-label="${esc(t('a11y.step', { n }))}">${n}</span><h2>${esc(t(key))}</h2></div>`;
+  const chip = (label, on, attr) => `<button type="button" class="chip ${on ? 'on' : ''}" aria-pressed="${on}" ${attr}>${esc(label)}</button>`;
+  const slots = Array.isArray(state.settings?.time_slots) ? state.settings.time_slots : [];
+  const services = [t('book.generalConsult'), ...state.services.map((s) => s.name)];
+  const svc = bkService();
+  const signed = !!state.session;
+  const field = (k, id, label, value, extra = '') => `<div class="field ${e[k] ? 'invalid' : ''}">
+      <label for="${id}">${esc(label)}</label>
+      <input id="${id}" name="${k}" value="${esc(value)}" ${extra}>
+      <div class="field-err" role="alert">${esc(e[k] ? t(e[k]) : '')}</div>
+    </div>`;
+  el.innerHTML = `<form class="bform card" id="bform" novalidate>
+    ${step(1, 'book.step1')}
+    <div class="bsec">
+      <div class="blbl">${esc(t('book.chooseDoctor'))}</div>
+      ${doctorRadiosHtml('bdoc', bk.doctorId, e.doctor)}
+      <div class="blbl">${esc(t('book.service'))}</div>
+      <div class="chips">${services.map((s) => chip(s, s === svc, `data-svc="${esc(s)}"`)).join('')}</div>
+    </div>
+    ${step(2, 'book.step2')}
+    <div class="bsec">
+      <div class="blbl">${esc(t('book.type'))}</div>
+      <div class="typerow">
+        <div class="seg seg-block" role="radiogroup" id="bkType">
+          <span class="seg-thumb" aria-hidden="true"></span>
+          <button type="button" class="seg-btn" role="radio" aria-checked="${bk.type === 'offline'}" data-type="offline">🏥 ${esc(t('book.inPerson'))}</button>
+          <button type="button" class="seg-btn" role="radio" aria-checked="${bk.type === 'online'}" data-type="online">📹 ${esc(t('book.online'))}</button>
+        </div>
+        <div class="feebox" aria-live="polite"><span class="muted">${esc(t('book.fee'))}</span><b id="bkFee">${esc(inr(fee(bk.type)))}</b></div>
+      </div>
+      <div class="field-row">
+        ${field('date', 'bkDate', t('book.date'), bk.date, `type="date" min="${todayISO()}"`)}
+        <div class="field ${e.time ? 'invalid' : ''}">
+          <label id="bkTimeLbl">${esc(t('book.time'))}</label>
+          ${slots.length
+            ? `<div class="chips tslots" role="group" aria-labelledby="bkTimeLbl">${slots.map((s) => chip(s, s === bk.time, `data-slot="${esc(s)}"`)).join('')}</div>`
+            : `<p class="muted noslots">${esc(t('book.noSlots'))}</p>`}
+          <div class="field-err" role="alert">${esc(e.time ? t(e.time) : '')}</div>
+        </div>
+      </div>
+    </div>
+    ${step(3, 'book.step3')}
+    <div class="bsec">
+      <div class="field-row">
+        ${field('name', 'bkName', t('book.patientName'), bkName(), 'autocomplete="name" maxlength="80"')}
+        ${field('phone', 'bkPhone', t('book.phone'), bkPhone(), 'inputmode="numeric" autocomplete="tel-national" maxlength="14"')}
+      </div>
+      <div class="field">
+        <label for="bkNotes">${esc(t('book.notes'))}</label>
+        <textarea id="bkNotes" name="notes" rows="2" maxlength="400" placeholder="${esc(t('book.notesPlaceholder'))}">${esc(bk.notes)}</textarea>
+        <div class="field-err"></div>
+      </div>
+      <button type="submit" class="btn ${signed ? 'btn-teal' : 'btn-wa'} block" ${bk.busy ? 'aria-busy="true"' : ''}>
+        <span class="ico" aria-hidden="true">${signed ? '📅' : '💬'}</span>
+        <span class="lbl">${esc(bk.busy ? t('book.submitting') : t(signed ? 'book.submit' : 'book.submitGuest'))}</span>
+      </button>
+      ${signed ? '' : `<p class="muted hint">${esc(t('book.sub'))}</p>`}
+    </div>
+  </form>`;
+  // bindings
+  el.querySelectorAll('input[name="bdoc"]').forEach((r) => r.addEventListener('change', () => {
+    bk.doctorId = r.value;
+    delete bk.errors.doctor;
+    el.querySelectorAll('.dradio').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
+    el.querySelector('.dpick + .field-err').textContent = '';
+  }));
+  el.querySelectorAll('[data-svc]').forEach((b) => b.addEventListener('click', () => {
+    bk.service = b.dataset.svc === t('book.generalConsult') ? null : b.dataset.svc;
+    el.querySelectorAll('[data-svc]').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); });
+  }));
+  const seg = $('bkType');
+  initSeg(seg, (b) => {
+    bk.type = b.dataset.type;
+    setSegValue(seg, 'type', bk.type);
+    $('bkFee').textContent = inr(fee(bk.type));
+  });
+  $('bkDate').addEventListener('input', (ev) => { bk.date = ev.target.value; });
+  el.querySelectorAll('[data-slot]').forEach((b) => b.addEventListener('click', () => {
+    bk.time = b.dataset.slot;
+    delete bk.errors.time;
+    el.querySelectorAll('[data-slot]').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); });
+    b.closest('.field').classList.remove('invalid');
+    b.closest('.field').querySelector('.field-err').textContent = '';
+  }));
+  $('bkName').addEventListener('input', (ev) => { bk.name = ev.target.value; });
+  $('bkPhone').addEventListener('input', (ev) => { bk.phone = ev.target.value; });
+  $('bkNotes').addEventListener('input', (ev) => { bk.notes = ev.target.value; });
+  $('bform').addEventListener('submit', (ev) => { ev.preventDefault(); submitBooking(); });
+}
+
+function validateBooking() {
+  const errors = {};
+  const phone = digits(bkPhone());
+  if (!docById(bk.doctorId)) errors.doctor = 'book.errDoctor';
+  if (!bk.date || bk.date < todayISO()) errors.date = 'book.errDate';
+  if (!bk.time) errors.time = 'book.errTime';
+  if (bkName().trim().length < 2) errors.name = 'book.errName';
+  if (!/^\d{10}$/.test(phone)) errors.phone = 'checkout.errPhone';
+  return { errors, phone };
+}
+
+async function submitBooking() {
+  if (bk.busy) return;
+  const { errors, phone } = validateBooking();
+  bk.errors = errors;
+  if (Object.keys(errors).length) {
+    renderBookForm();
+    const first = Object.keys(errors)[0];
+    const target = first === 'doctor' ? $('bform').querySelector('input[name="bdoc"]') : first === 'time' ? $('bform').querySelector('[data-slot]') : $(`bk${first[0].toUpperCase()}${first.slice(1)}`);
+    target?.focus();
+    target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  const doc = docById(bk.doctorId);
+  const a = {
+    doctorId: doc.id, doctorName: doc.name, service: bkService(), consultType: bk.type,
+    date: bk.date, time: bk.time, patientName: bkName().trim(), phone, notes: bk.notes.trim(), fee: fee(bk.type),
+  };
+  // remember patient details for next time (only fill gaps — the account holder may book for family)
+  if (!state.profile.name) state.profile.name = a.patientName;
+  if (!state.profile.phone) state.profile.phone = phone;
+  saveProfile();
+
+  if (!state.session) {
+    // Guest: WhatsApp request + local record (synchronous open — popup-safe).
+    ui.openExternal(waHref(buildAppointmentMessage(a)));
+    state.appts.unshift({ local: true, id: 'L-' + Date.now(), ...a, status: 'whatsapp', createdAt: new Date().toISOString() });
+    saveAppts();
+    ui.toast(t('book.sentWhatsApp'), 'ok');
+    bk.date = ''; bk.time = ''; bk.notes = ''; bk.errors = {};
+    renderBookForm();
+    renderMyAppts();
+    $('myApptsSec')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  bk.busy = true;
+  renderBookForm();
+  const { error } = await safe(db.from('appointments').insert({
+    user_id: state.session.user.id,
+    doctor_id: a.doctorId,
+    doctor_name: a.doctorName,
+    patient_name: a.patientName,
+    phone: a.phone,
+    consult_type: a.consultType,
+    service: a.service,
+    appointment_date: a.date,
+    appointment_time: a.time,
+    notes: a.notes || null,
+    fee: a.fee,
+    status: 'pending',
+  }).select('id').single());
+  bk.busy = false;
+  if (error) {
+    ui.toast(`${t('book.failed')}${error.message ? ` — ${error.message}` : ''}`, 'err', 5000);
+    renderBookForm();
+    return;
+  }
+  bk.success = true;
+  bk.errors = {};
+  renderBookForm();
+  loadMyAppts(true);
+}
+
+// --- My appointments: server rows (signed in) + local guest rows, newest date first
+function apptView(r) {
+  if (r.local) return { id: r.id, local: true, doctorName: r.doctorName, service: r.service, date: r.date, time: r.time, type: r.consultType, fee: r.fee, status: r.status || 'whatsapp', phone: r.phone };
+  return { id: r.id, local: false, doctorName: r.doctor_name, service: r.service, date: r.appointment_date, time: r.appointment_time, type: r.consult_type, fee: r.fee, status: r.status || 'pending', phone: r.phone };
+}
+const APPT_STATUSES = ['pending', 'confirmed', 'completed', 'cancelled', 'whatsapp'];
+
+function renderMyAppts() {
+  const el = $('myAppts');
+  const signed = !!state.session;
+  const rows = [...(signed ? myAppts.rows ?? [] : []), ...state.appts].map(apptView)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.time).localeCompare(String(a.time)));
+  if (signed && myAppts.loading && !rows.length) { el.innerHTML = ui.skeleton('line', 3); return; }
+  if (!rows.length) {
+    el.innerHTML = signed
+      ? emptyState('📅', t('book.empty'), t('book.emptySub'))
+      : emptyState('🔒', t('book.signInToSee'), '', `<button type="button" class="btn btn-teal" data-signin><span class="ico" aria-hidden="true">👤</span><span class="lbl">${esc(t('auth.signIn'))}</span></button>`);
+    el.querySelector('[data-signin]')?.addEventListener('click', openAccount);
+    return;
+  }
+  el.innerHTML = `${signed && myAppts.error ? `<p class="muted hint left">${esc(t('common.offline'))}</p>` : ''}
+  <div class="alist">${rows.map((a) => {
+    const st = APPT_STATUSES.includes(a.status) ? a.status : 'pending';
+    const canCancelAppt = !a.local && (st === 'pending' || st === 'confirmed');
+    return `<article class="card acard" data-appt="${esc(a.id)}">
+      <div class="adate" aria-hidden="true"><b>${esc(fmtDay(a.date, false))}</b><small>${esc(a.time ?? '')}</small></div>
+      <div class="abody">
+        <div class="ahead"><b>${esc(a.doctorName ?? '')}</b><span class="pill pill-${esc(st)}">${esc(t(`book.status.${st}`))}</span></div>
+        <div class="ameta">${esc(a.service ?? '')} · ${esc(t(a.type === 'online' ? 'book.online' : 'book.inPerson'))} · ${esc(inr(a.fee ?? 0))}</div>
+        <div class="ameta muted">${esc(fmtDay(a.date))}${a.time ? ` · ${esc(a.time)}` : ''}</div>
+        ${canCancelAppt ? `<div class="oactions"><button type="button" class="btn btn-ghost danger sm" data-cancel-appt><span class="ico" aria-hidden="true">✕</span><span class="lbl">${esc(t('book.cancel'))}</span></button></div>` : ''}
+      </div>
+    </article>`;
+  }).join('')}</div>`;
+  el.querySelectorAll('[data-cancel-appt]').forEach((b) => b.addEventListener('click', () => {
+    const id = b.closest('[data-appt]').dataset.appt;
+    const row = (myAppts.rows ?? []).find((r) => String(r.id) === id);
+    if (row) cancelAppointment(row, b);
+  }));
+}
+
+async function cancelAppointment(row, btn) {
+  const ok = await ui.confirm({ title: t('book.cancel'), body: t('book.cancelConfirm'), ok: t('book.cancel'), cancel: t('common.keep'), danger: true });
+  if (!ok) return;
+  btn?.setAttribute('aria-busy', 'true');
+  const { error } = await safe(db.rpc('cancel_my_appointment', { p_id: row.id, p_phone: row.phone }));
+  btn?.removeAttribute('aria-busy');
+  if (error) { ui.toast(error.message || t('book.cancelFailed'), 'err', 5000); return; }
+  row.status = 'cancelled';
+  ui.toast(t('book.cancelled'), 'ok');
+  renderMyAppts();
+}
+
+// =====================================================================
+// TOKEN — take_token form, live .tcard with 12 s queue_status polling, share/print/cancel
+// =====================================================================
+const tk = { doctorId: null, name: null, phone: null, errors: {}, busy: false, live: null, bannerHidden: null };
+const tkName = () => (tk.name ?? state.profile.name ?? '');
+const tkPhone = () => (tk.phone ?? state.profile.phone ?? '');
+const TOKEN_OPEN = ['waiting', 'serving'];
+const TOKEN_CLOSED = ['done', 'skipped', 'cancelled'];
+const POLL_MS = 12_000;
+const MIN_PER_PATIENT = 10;
+// Today's live token (waiting/serving), if any.
+const activeToken = () => state.tokens.find((x) => TOKEN_OPEN.includes(x.status) && x.day === todayISO());
+// Today's finished token (done/skipped) for the closed banner.
+const closedToken = () => state.tokens.find((x) => (x.status === 'done' || x.status === 'skipped') && x.day === todayISO());
+
+export function renderToken(force = false) {
+  const tok = activeToken();
+  if (tok) {
+    $('tokenForm').innerHTML = '';
+    renderTokenCard(tok);
+    startTokenPoll();
+    return;
+  }
   $('tokenLive').innerHTML = '';
-  $('tokenForm').innerHTML = emptyState('🎫', t('token.intro'), t('token.note'));
+  if (force || !typingInEl('tokenForm')) renderTokenForm();
+}
+
+function renderTokenForm() {
+  const el = $('tokenForm');
+  const e = tk.errors;
+  const closed = closedToken();
+  const banner = closed && tk.bannerHidden !== closed.id
+    ? `<div class="card tbanner ${esc(closed.status)}" role="status">
+        <span class="ico" aria-hidden="true">${closed.status === 'done' ? '✅' : '⏭️'}</span>
+        <span class="txt">${esc(t(closed.status === 'done' ? 'token.doneNote' : 'token.skippedNote', { n: closed.tokenNo }))}</span>
+        <button type="button" class="btn btn-ghost sm" data-new-token><span class="lbl">${esc(t('token.newToken'))}</span></button>
+      </div>`
+    : '';
+  const field = (k, id, label, value, extra = '') => `<div class="field ${e[k] ? 'invalid' : ''}">
+      <label for="${id}">${esc(label)}</label>
+      <input id="${id}" name="${k}" value="${esc(value)}" ${extra}>
+      <div class="field-err" role="alert">${esc(e[k] ? t(e[k]) : '')}</div>
+    </div>`;
+  el.innerHTML = `${banner}
+  <div class="card tintro"><span class="ico" aria-hidden="true">🎫</span><p>${esc(t('token.intro'))}</p></div>
+  <form class="bform card" id="tkform" novalidate>
+    <div class="blbl">${esc(t('token.chooseDoctor'))}</div>
+    ${doctorRadiosHtml('tkdoc', tk.doctorId, e.doctor)}
+    <div class="field-row">
+      ${field('name', 'tkName', t('token.patientName'), tkName(), 'autocomplete="name" maxlength="80"')}
+      ${field('phone', 'tkPhone', t('token.phone'), tkPhone(), 'inputmode="numeric" autocomplete="tel-national" maxlength="14"')}
+    </div>
+    <button type="submit" class="btn btn-gold block" ${tk.busy ? 'aria-busy="true"' : ''}>
+      <span class="ico" aria-hidden="true">🎫</span>
+      <span class="lbl">${esc(tk.busy ? t('token.getting') : t('token.get'))}</span>
+    </button>
+    <p class="muted hint">${esc(t('token.note'))}</p>
+  </form>`;
+  el.querySelector('[data-new-token]')?.addEventListener('click', () => {
+    tk.bannerHidden = closed.id;
+    renderTokenForm();
+    $('tkform').querySelector('input[name="tkdoc"]')?.focus();
+  });
+  el.querySelectorAll('input[name="tkdoc"]').forEach((r) => r.addEventListener('change', () => {
+    tk.doctorId = r.value;
+    delete tk.errors.doctor;
+    el.querySelectorAll('.dradio').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
+    el.querySelector('.dpick + .field-err').textContent = '';
+  }));
+  $('tkName').addEventListener('input', (ev) => { tk.name = ev.target.value; });
+  $('tkPhone').addEventListener('input', (ev) => { tk.phone = ev.target.value; });
+  $('tkform').addEventListener('submit', (ev) => { ev.preventDefault(); takeToken(); });
+}
+
+async function takeToken() {
+  if (tk.busy) return;
+  const errors = {};
+  const phone = digits(tkPhone());
+  const doc = docById(tk.doctorId);
+  if (!doc) errors.doctor = 'token.errDoctor';
+  if (tkName().trim().length < 2) errors.name = 'token.errName';
+  if (!/^\d{10}$/.test(phone)) errors.phone = 'token.errPhone';
+  tk.errors = errors;
+  if (Object.keys(errors).length) {
+    renderTokenForm();
+    const first = Object.keys(errors)[0];
+    (first === 'doctor' ? $('tkform').querySelector('input[name="tkdoc"]') : $(first === 'name' ? 'tkName' : 'tkPhone'))?.focus();
+    return;
+  }
+  const patientName = tkName().trim();
+  tk.busy = true;
+  renderTokenForm();
+  const { data, error } = await safe(db.rpc('take_token', { p_doctor_id: doc.id, p_patient_name: patientName, p_phone: phone }));
+  tk.busy = false;
+  if (error || !data) {
+    // Server messages (phone limit, doctor unavailable, already has a token) shown verbatim.
+    ui.toast(error?.message || t('token.failed'), 'err', 5000);
+    renderTokenForm();
+    return;
+  }
+  if (!state.profile.name) state.profile.name = patientName;
+  if (!state.profile.phone) state.profile.phone = phone;
+  saveProfile();
+  state.tokens.unshift({
+    id: data.id, tokenNo: Number(data.token_no), day: String(data.day), doctorId: doc.id,
+    doctorName: data.doctor_name || doc.name, patientName, phone, status: 'waiting', createdAt: new Date().toISOString(),
+  });
+  state.tokens = state.tokens.slice(0, 10);
+  saveTokens();
+  tk.live = { serving_no: data.serving_no ?? null, ahead: data.ahead ?? null, my_status: 'waiting' };
+  renderToken(true);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// --- live card
+function renderTokenCard(tok) {
+  const q = tk.live;
+  const serving = tok.status === 'serving';
+  const started = q?.serving_no != null && Number(q.serving_no) > 0;
+  // ahead comes from the server only (null until the first queue_status reply) — never guessed.
+  const ahead = q ? (serving ? 0 : Math.max(0, Number(q.ahead ?? 0))) : null;
+  const stat = (label, value) => `<div class="tstat"><span class="lbl">${esc(label)}</span><b>${value}</b></div>`;
+  const abtn = (attr, cls, ico, label) => `<button type="button" class="btn ${cls} sm" ${attr}><span class="ico" aria-hidden="true">${ico}</span><span class="lbl">${esc(label)}</span></button>`;
+  $('tokenLive').innerHTML = `<div class="tlive">
+    <article class="card tcard ${serving ? 'turn' : ''}" aria-live="polite">
+      <div class="thead"><span class="thosp">${esc(hospitalName())}</span><span class="pill pill-live">${esc(t('token.liveUpdating'))}</span></div>
+      <div class="tlabel">${esc(t('token.label'))}</div>
+      <div class="tno" id="tokenNo">#${esc(tok.tokenNo)}</div>
+      <div class="tdoc">${esc(tok.doctorName)}</div>
+      <div class="tmeta">${esc(fmtDay(tok.day))} · ${esc(tok.patientName)}</div>
+      ${serving
+        ? `<div class="tturn" role="status">🔔 ${esc(t('token.yourTurn'))}</div>`
+        : `<span class="pill pill-${esc(tok.status)} tpill">${esc(t(`token.status.${tok.status}`))}</span>`}
+    </article>
+    <div class="card tstats" aria-live="polite">
+      ${stat(t('token.nowServing'), started ? `#${esc(q.serving_no)}` : `<span class="muted">${esc(t('token.notStarted'))}</span>`)}
+      ${stat(t('token.ahead'), ahead == null ? '—' : esc(ahead))}
+      ${stat(t('token.estWait'), serving ? esc(t('token.pleaseWait')) : ahead == null ? '—' : esc(t('common.approxMin', { n: ahead * MIN_PER_PATIENT })))}
+    </div>
+    <p class="muted hint">${esc(t('token.waitingHint'))}</p>
+    <div class="oactions tactions">
+      ${abtn('data-share', 'btn-teal', '📤', t('token.share'))}
+      ${abtn('data-print', 'btn-ghost', '🖨️', t('token.print'))}
+      ${tok.status === 'waiting' ? abtn('data-cancel', 'btn-ghost danger', '✕', t('token.cancel')) : ''}
+    </div>
+  </div>`;
+  const root = $('tokenLive');
+  root.querySelector('[data-share]').addEventListener('click', (ev) => shareToken(tok, ev.currentTarget));
+  root.querySelector('[data-print]').addEventListener('click', () => printToken(tok));
+  root.querySelector('[data-cancel]')?.addEventListener('click', (ev) => cancelToken(tok, ev.currentTarget));
+}
+
+// --- polling: every 12 s while today's token is waiting/serving and the tab is visible
+let tokenTimer = null;
+async function pollToken() {
+  const tok = activeToken();
+  if (!tok) { stopTokenPoll(); return; }
+  if (document.hidden) return;
+  const { data, error } = await safe(db.rpc('queue_status', { p_doctor_id: tok.doctorId, p_token_no: tok.tokenNo }));
+  if (error || !data) return;
+  tk.live = data;
+  const st = data.my_status;
+  if (st && st !== tok.status && [...TOKEN_OPEN, ...TOKEN_CLOSED].includes(st)) {
+    tok.status = st;
+    saveTokens();
+    if (st === 'serving') ui.toast(t('token.yourTurn'), 'ok', 6000);
+  }
+  if (TOKEN_CLOSED.includes(tok.status)) stopTokenPoll();
+  if (state.route.name === 'token') renderToken(true);
+}
+function startTokenPoll() {
+  if (tokenTimer) return;
+  pollToken();
+  tokenTimer = setInterval(pollToken, POLL_MS);
+}
+function stopTokenPoll() { clearInterval(tokenTimer); tokenTimer = null; }
+
+// --- cancel: RPC then re-check the queue (the RPC returns void)
+async function cancelToken(tok, btn) {
+  const ok = await ui.confirm({ title: t('token.cancel'), body: t('token.cancelConfirm', { n: tok.tokenNo }), ok: t('token.cancel'), cancel: t('common.keep'), danger: true });
+  if (!ok) return;
+  btn?.setAttribute('aria-busy', 'true');
+  const { error } = await safe(db.rpc('cancel_token', { p_token_id: tok.id }));
+  const re = await safe(db.rpc('queue_status', { p_doctor_id: tok.doctorId, p_token_no: tok.tokenNo }));
+  btn?.removeAttribute('aria-busy');
+  const st = re.data?.my_status;
+  if (!st || st === 'waiting') {
+    ui.toast(error?.message || t('token.cancelFailed'), 'err', 5000);
+    return;
+  }
+  tok.status = st;
+  saveTokens();
+  tk.live = re.data;
+  if (st === 'cancelled') { ui.toast(t('token.cancelled'), 'ok'); stopTokenPoll(); }
+  renderToken(true);
+}
+
+// --- share: draw the card on a canvas → Web Share (files) or PNG download
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+function drawTokenCanvas(tok) {
+  const W = 720; const H = 900;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const serving = tok.status === 'serving';
+  const grad = g.createLinearGradient(0, 0, W, H);
+  if (serving) { grad.addColorStop(0, '#92400e'); grad.addColorStop(1, '#d97706'); }
+  else { grad.addColorStop(0, '#0a1628'); grad.addColorStop(0.55, '#0f4c75'); grad.addColorStop(1, '#205295'); }
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, W, H);
+  g.fillStyle = grad;
+  roundRect(g, 24, 24, W - 48, H - 48, 40);
+  g.fill();
+  // soft blob
+  g.fillStyle = 'rgba(0,206,201,.22)';
+  g.beginPath(); g.arc(W - 80, 110, 190, 0, Math.PI * 2); g.fill();
+  const F = '"DM Sans", "Noto Sans Devanagari", "Segoe UI", system-ui, sans-serif';
+  const D = '"Playfair Display", "Noto Sans Devanagari", Georgia, serif';
+  g.textAlign = 'center';
+  g.fillStyle = '#ffffff';
+  g.font = `700 34px ${F}`;
+  g.fillText(hospitalName(), W / 2, 120, W - 120);
+  g.fillStyle = 'rgba(255,255,255,.72)';
+  g.font = `700 22px ${F}`;
+  g.fillText(t('token.label').toUpperCase(), W / 2, 215, W - 120);
+  g.fillStyle = '#ffffff';
+  g.font = `800 230px ${D}`;
+  g.fillText(`#${tok.tokenNo}`, W / 2, 470, W - 120);
+  g.font = `700 38px ${F}`;
+  g.fillText(tok.doctorName, W / 2, 560, W - 120);
+  g.fillStyle = 'rgba(255,255,255,.85)';
+  g.font = `500 28px ${F}`;
+  g.fillText(`${fmtDay(tok.day)} · ${tok.patientName}`, W / 2, 615, W - 120);
+  if (serving) {
+    g.fillStyle = '#ffffff';
+    g.font = `700 30px ${F}`;
+    g.fillText(t('token.yourTurn'), W / 2, 690, W - 120);
+  }
+  g.fillStyle = 'rgba(255,255,255,.7)';
+  g.font = `500 24px ${F}`;
+  g.fillText(t('token.issuedAt', { time: fmtTime(tok.createdAt) }), W / 2, 790, W - 120);
+  g.font = `500 20px ${F}`;
+  g.fillText(location.origin + location.pathname, W / 2, 835, W - 120);
+  return c;
+}
+async function shareToken(tok, btn) {
+  btn?.setAttribute('aria-busy', 'true');
+  try {
+    const canvas = drawTokenCanvas(tok);
+    const blob = await new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'));
+    const file = new File([blob], `token-${tok.tokenNo}.png`, { type: 'image/png' });
+    if (navigator.canShare?.({ files: [file] }) && navigator.share) {
+      await navigator.share({ files: [file], title: `${hospitalName()} · ${t('token.label')} #${tok.tokenNo}` });
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      ui.toast(t('token.saved'), 'ok');
+    }
+  } catch (err) {
+    if (err?.name !== 'AbortError') ui.toast(t('token.shareFailed'), 'err');
+  } finally {
+    btn?.removeAttribute('aria-busy');
+  }
+}
+
+// --- print slip via #printArea
+function printToken(tok) {
+  const s = state.settings ?? {};
+  $('printArea').innerHTML = `<div class="pbill pslip">
+    <div class="pb-head">
+      <h1>${esc(hospitalName())}</h1>
+      <p>${esc([s.address, s.phone].filter(Boolean).join(' · '))}</p>
+    </div>
+    <h2>${esc(t('token.slipTitle'))}</h2>
+    <div class="big">#${esc(tok.tokenNo)}</div>
+    <div class="meta">
+      <div><b>${esc(t('token.doctor'))}</b><br>${esc(tok.doctorName)}</div>
+      <div><b>${esc(t('token.patient'))}</b><br>${esc(tok.patientName)}<br>${esc(tok.phone)}</div>
+      <div><b>${esc(t('token.day'))}</b><br>${esc(fmtDay(tok.day))}</div>
+      <div><b>${esc(t('token.status.waiting'))}</b><br>${esc(t('token.issuedAt', { time: fmtTime(tok.createdAt) }))}</div>
+    </div>
+    <p class="thanks">${esc(t('token.waitingHint'))}</p>
+  </div>`;
+  window.print();
 }
 
 // =====================================================================
@@ -1734,6 +2361,7 @@ initCarousel();
 initLangSegs();
 router();
 loadAll();
+if (activeToken()) startTokenPoll(); // keep today's token status fresh even off the token screen
 
 onLangChange(() => {
   syncLangSegs();
@@ -1742,6 +2370,11 @@ onLangChange(() => {
 window.addEventListener('hashchange', router);
 setInterval(loadAll, 60_000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { loadAll(); if (state.route.name === 'home') loadQueue(); syncOrdersDebounced(); }
+  if (document.visibilityState === 'visible') {
+    loadAll();
+    if (state.route.name === 'home') loadQueue();
+    if (activeToken()) pollToken();
+    syncOrdersDebounced();
+  }
 });
 window.addEventListener('focus', syncOrdersDebounced);
