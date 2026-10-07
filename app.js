@@ -45,10 +45,15 @@ export const state = {
   activeCat: null,
   query: '',
   payMethod: 'upi',
-  coupon: null,           // { code, discount }
+  coupon: null,           // { code, discount, message }
+  couponMsg: null,        // { text, ok } inline message under the coupon field
   placing: false,
+  productId: null,        // medicine shown in #sheetProduct
+  reviews: { id: null, rows: null, error: false },  // cache for the open product
+  reviewDraft: { rating: 0, body: '' },
+  successOrder: null,     // Order shown in the cart sheet's success view (null = normal cart)
   ordersFilter: 'all',
-  route: { name: 'home', sub: null, params: new URLSearchParams() },
+  route: { name: 'home', sub: null, params: new Map() },
   cart: readLS(LS.cart, {}),           // { [medicineId]: qty }
   profile: readLS(LS.profile, {}),     // { name, phone, address, city, pincode }
   orders: readLS(LS.orders, []),       // Order[] newest first (max 30)
@@ -75,7 +80,7 @@ const waHref = (text) => {
 const safeColor = (c, fallback) => (/^#[0-9a-f]{3,8}$/i.test(String(c ?? '')) ? c : fallback);
 const hospitalName = () => state.settings?.hospital_name ?? 'Sri Sai Hospital';
 
-// UPI deep link — encodeURIComponent per field (URLSearchParams breaks UPI apps with '+').
+// UPI deep link — encodeURIComponent per field (a form-encoded '+' breaks UPI apps).
 export function upiUrl(amount, note) {
   const s = state.settings ?? {};
   const f = [
@@ -174,11 +179,22 @@ function initLangSegs() {
 
 // ---------------- router ----------------
 const SCREENS = ['home', 'pharmacy', 'book', 'token', 'orders'];
+// '#book?doctor=abc&x=1' → Map { doctor → 'abc', x → '1' } (use params.get(key)).
+function parseQuery(qs) {
+  const m = new Map();
+  String(qs ?? '').split('&').filter(Boolean).forEach((pair) => {
+    const i = pair.indexOf('=');
+    const k = i < 0 ? pair : pair.slice(0, i);
+    const v = i < 0 ? '' : pair.slice(i + 1);
+    try { m.set(decodeURIComponent(k), decodeURIComponent(v)); } catch { m.set(k, v); }
+  });
+  return m;
+}
 export function parseHash() {
   const raw = location.hash.replace(/^#/, '');
   const [path, qs] = raw.split('?');
   const [name, sub] = path.split('/');
-  return { name: SCREENS.includes(name) ? name : 'home', sub: sub || null, params: new URLSearchParams(qs || '') };
+  return { name: SCREENS.includes(name) ? name : 'home', sub: sub || null, params: parseQuery(qs) };
 }
 const SCREEN_RENDER = {
   home: () => renderHome(),
@@ -243,11 +259,16 @@ function renderSkeletons() {
 }
 
 // ---------------- render: everything ----------------
-export function renderAll() {
+// langSwitch=true re-renders everything (incl. the order-success view); the periodic
+// refresh leaves the success view alone and never yanks the caret out of a field.
+export function renderAll(langSwitch = false) {
   renderChrome();
   renderCartBadge();
+  renderCartBar();
   SCREEN_RENDER[state.route.name]?.();
-  if (ui.currentSheet() === 'sheetCart') renderCart();
+  const typing = (id) => { const a = document.activeElement; return a && $(id)?.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName); };
+  if (ui.currentSheet() === 'sheetCart' && !typing('sheetCart') && (langSwitch || !state.successOrder)) renderCart();
+  if (ui.currentSheet() === 'sheetProduct' && !typing('sheetProduct')) renderProduct();
   if (ui.currentSheet() === 'sheetAccount') renderAccount();
 }
 
@@ -515,7 +536,7 @@ function startQueuePoll() {
 }
 function stopQueuePoll() { clearInterval(queueTimer); queueTimer = null; }
 
-// ---------------- cart badge (cart logic lands in FEAT-002) ----------------
+// ---------------- cart badge (header + bottom bar) ----------------
 export function cartCount() {
   return Object.values(state.cart).reduce((a, b) => a + Number(b || 0), 0);
 }
@@ -534,7 +555,83 @@ export function renderCartBadge(bumpIt = false) {
 const emptyState = (ico, title, sub = '', btn = '') =>
   `<div class="empty"><span class="empty-ico" aria-hidden="true">${ico}</span><h3>${esc(title)}</h3>${sub ? `<p>${esc(sub)}</p>` : ''}${btn}</div>`;
 
-// Pharmacy: category chips + delivery note now; product cards come in FEAT-002.
+// =====================================================================
+// PHARMACY — search, category chips, product grid, mini cart bar
+// =====================================================================
+const medById = (id) => state.medicines.find((x) => String(x.id) === String(id));
+const stockOf = (m) => Math.max(0, Number(m?.stock ?? 0));
+const offPct = (m) => (Number(m.mrp) > Number(m.price) ? Math.round((Number(m.mrp) - Number(m.price)) / Number(m.mrp) * 100) : 0);
+const qtyOf = (id) => Number(state.cart[id] || 0);
+
+// Media box shared by cards, cart lines and the product sheet (image lazy-loaded, else emoji).
+const mediaHtml = (m, cls = 'pmedia') =>
+  `<span class="${cls}" aria-hidden="true">${m.image_url
+    ? `<img src="${esc(m.image_url)}" alt="" loading="lazy" decoding="async">`
+    : `<span class="pemoji">${esc(m.emoji || '💊')}</span>`}</span>`;
+
+const priceHtml = (m) =>
+  `<span class="pprice"><b>${esc(inr(m.price))}</b>${offPct(m) ? `<s>${esc(inr(m.mrp))}</s>` : ''}</span>`;
+
+// Stock line: In stock / Only N left / Out of stock ('' when plenty & compact).
+function stockHtml(m, compact) {
+  const st = stockOf(m);
+  if (st <= 0) return `<span class="pstock out">${esc(t('shop.outOfStock'))}</span>`;
+  if (st <= 5) return `<span class="pstock low">${esc(t('shop.onlyLeft', { n: st }))}</span>`;
+  return compact ? '' : `<span class="pstock ok">${esc(t('shop.inStock'))}</span>`;
+}
+
+// ADD button or stepper for one medicine. Containers carry data-pact=<id> so a
+// qty change re-paints every copy (grid card + product sheet) without a full re-render.
+function actionHtml(m, { block = false } = {}) {
+  const st = stockOf(m);
+  const q = qtyOf(m.id);
+  const cls = block ? 'btn btn-teal block' : 'btn btn-teal sm block';
+  if (st <= 0) return `<button type="button" class="${block ? 'btn btn-ghost block' : 'btn btn-ghost sm block'}" disabled><span class="lbl">${esc(t('shop.outOfStock'))}</span></button>`;
+  if (q <= 0) return `<button type="button" class="${cls}" data-add="${esc(m.id)}" aria-label="${esc(t('shop.addToCart'))}"><span class="ico" aria-hidden="true">＋</span><span class="lbl">${esc(t('shop.add'))}</span></button>`;
+  return `<div class="stepper${block ? ' block' : ''}">
+    <button type="button" class="step-dec" data-dec="${esc(m.id)}" aria-label="${esc(t('shop.decrease'))}">−</button>
+    <b class="step-qty" aria-live="polite">${q}</b>
+    <button type="button" class="step-inc" data-inc="${esc(m.id)}" aria-label="${esc(t('shop.increase'))}" ${q >= st ? 'disabled' : ''}>+</button>
+  </div>`;
+}
+function bindActions(root) {
+  root.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); setQty(b.dataset.add, 1); }));
+  root.querySelectorAll('[data-inc]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); setQty(b.dataset.inc, qtyOf(b.dataset.inc) + 1); }));
+  root.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); setQty(b.dataset.dec, qtyOf(b.dataset.dec) - 1); }));
+}
+function repaintActions(id) {
+  const m = medById(id);
+  if (!m) return;
+  document.querySelectorAll(`[data-pact="${CSS.escape(String(id))}"]`).forEach((el) => {
+    el.innerHTML = actionHtml(m, { block: el.dataset.block === '1' });
+    bindActions(el);
+  });
+}
+
+function filteredMedicines() {
+  const q = state.query.trim().toLowerCase();
+  return state.medicines.filter((m) => {
+    if (state.activeCat && String(m.category_id) !== String(state.activeCat)) return false;
+    if (!q) return true;
+    return `${m.name ?? ''} ${m.brand ?? ''} ${m.composition ?? ''}`.toLowerCase().includes(q);
+  });
+}
+
+function pcardHtml(m) {
+  const pct = offPct(m);
+  return `<article class="card lift pcard" data-id="${esc(m.id)}">
+    <button type="button" class="pbody" data-open="${esc(m.id)}">
+      ${mediaHtml(m)}
+      <span class="pbadges">${pct ? `<span class="pb off">${esc(t('shop.off', { pct }))}</span>` : ''}${m.requires_rx ? `<span class="pb rx">${esc(t('shop.rx'))}</span>` : ''}</span>
+      <span class="pname">${esc(m.name)}</span>
+      <span class="ppack">${esc(m.pack_size ?? m.brand ?? '')}</span>
+      ${priceHtml(m)}
+      <span class="pstockline">${stockHtml(m, true)}</span>
+    </button>
+    <div class="pact" data-pact="${esc(m.id)}">${actionHtml(m)}</div>
+  </article>`;
+}
+
 export function renderPharmacy() {
   const s = state.settings;
   $('deliveryNote').textContent = s
@@ -542,12 +639,22 @@ export function renderPharmacy() {
     : '';
   const mk = (id, label, emoji) =>
     `<button type="button" class="chip ${state.activeCat === id ? 'on' : ''}" aria-pressed="${state.activeCat === id}" data-cat="${esc(id ?? '')}">${emoji ? `<span aria-hidden="true">${esc(emoji)}</span>` : ''}${esc(label)}</button>`;
-  $('cats').innerHTML = mk(null, t('shop.all'), '') + state.categories.map((c) => mk(c.id, c.name, c.emoji)).join('');
+  const cats = [...state.categories].sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
+  $('cats').innerHTML = mk(null, t('shop.all'), '') + cats.map((c) => mk(String(c.id), c.name, c.emoji)).join('');
   $('cats').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
     state.activeCat = b.dataset.cat || null;
     renderPharmacy();
   }));
+  if ($('search').value !== state.query) $('search').value = state.query;
+  $('searchClear').hidden = !state.query;
+  renderGrid();
+  renderCartBar();
+}
+
+function renderGrid() {
   const grid = $('grid');
+  const count = $('results');
+  count.textContent = '';
   if (!state.loaded) { grid.innerHTML = ui.skeleton('card', 6); return; }
   if (state.loadError && !state.medicines.length) {
     grid.innerHTML = emptyState('⚠️', t('shop.loadError'), '', `<button type="button" class="btn btn-teal" data-retry><span class="lbl">${esc(t('common.retry'))}</span></button>`);
@@ -555,24 +662,534 @@ export function renderPharmacy() {
     return;
   }
   if (!state.medicines.length) { grid.innerHTML = emptyState('💊', t('shop.emptyCatalog')); return; }
-  grid.innerHTML = ''; // FEAT-002 renders .pcard list + search/filter here
+  const list = filteredMedicines();
+  if (!list.length) { grid.innerHTML = emptyState('🔍', t('shop.empty'), t('shop.emptySub')); return; }
+  count.textContent = t('shop.results', { n: list.length });
+  grid.innerHTML = list.map(pcardHtml).join('');
+  grid.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openProduct(b.dataset.open)));
+  bindActions(grid);
+}
+const renderGridDebounced = ui.debounce(renderGrid, 300);
+
+// Sticky mini cart bar on the pharmacy screen (CSS hides it ≥720px).
+export function renderCartBar() {
+  const bar = $('cartbar');
+  const d = cartDetail();
+  if (!d.count || state.route.name !== 'pharmacy') { bar.hidden = true; bar.innerHTML = ''; return; }
+  bar.hidden = false;
+  bar.innerHTML = `<span class="cb-txt"><span class="ico" aria-hidden="true">🛒</span> ${esc(t('common.items', { n: d.count }))} · ${esc(inr(d.total))}</span>
+    <button type="button" class="btn btn-gold sm" data-open-cart><span class="lbl">${esc(t('shop.viewCart'))}</span></button>`;
+  bar.querySelector('[data-open-cart]').addEventListener('click', openCart);
 }
 
-// Cart sheet: FEAT-002 adds lines/stepper/checkout; today a read-only summary.
+// =====================================================================
+// CART STATE
+// =====================================================================
+// setQty: clamp to 0..stock, persist, bump badges, toast on add/remove, repaint.
+export function setQty(id, qty) {
+  const m = medById(id);
+  if (!m) return;
+  const st = stockOf(m);
+  const before = qtyOf(id);
+  let next = Math.max(0, Math.floor(Number(qty) || 0));
+  if (next > st) { next = st; if (before >= st) ui.toast(t('shop.maxStock', { n: st }), 'info'); }
+  if (next === before) { repaintActions(id); return; }
+  if (next <= 0) delete state.cart[id]; else state.cart[id] = next;
+  saveCart();
+  renderCartBadge(next > before);
+  if (before === 0 && next > 0) ui.toast(t('shop.added'), 'ok', 1800);
+  else if (before > 0 && next === 0) ui.toast(t('shop.removed'), 'info', 1800);
+  repaintActions(id);
+  renderCartBar();
+  if (ui.currentSheet() === 'sheetCart' && !state.successOrder) renderCart();
+}
+
+// Lines in the cart whose medicine still exists in the live catalog.
+export function cartLines() {
+  return Object.entries(state.cart)
+    .map(([id, qty]) => ({ m: medById(id), qty: Number(qty) }))
+    .filter((l) => l.m && l.qty > 0);
+}
+
+// Client-side ESTIMATE of the bill. After place_order the server numbers win.
+export function cartDetail() {
+  const s = state.settings ?? {};
+  const lines = cartLines();
+  const subtotal = lines.reduce((a, { m, qty }) => a + Number(m.price) * qty, 0);
+  const savings = lines.reduce((a, { m, qty }) => a + Math.max(0, Number(m.mrp ?? 0) - Number(m.price)) * qty, 0);
+  const freeAbove = Number(s.free_delivery_above ?? 0);
+  const feeBase = Number(s.delivery_fee ?? 0);
+  const deliveryFee = lines.length && subtotal < freeAbove ? feeBase : 0;
+  const discount = Math.min(subtotal, Math.max(0, Number(state.coupon?.discount ?? 0)));
+  const total = Math.max(0, subtotal + deliveryFee - discount);
+  const needsRx = lines.some(({ m }) => m.requires_rx);
+  const count = lines.reduce((a, l) => a + l.qty, 0);
+  return { lines, count, subtotal, savings, freeAbove, deliveryFee, discount, total, needsRx, moreForFree: Math.max(0, freeAbove - subtotal) };
+}
+
+export function openCart() {
+  state.successOrder = null;
+  renderCart();
+  ui.openSheet('sheetCart', { onClose: () => { state.successOrder = null; } });
+}
+
+// =====================================================================
+// PRODUCT SHEET (#sheetProduct) + reviews
+// =====================================================================
+export function openProduct(id) {
+  const m = medById(id);
+  if (!m) return;
+  state.productId = String(m.id);
+  if (state.reviews.id !== state.productId) {
+    state.reviews = { id: state.productId, rows: null, error: false };
+    state.reviewDraft = { rating: 0, body: '' };
+    loadReviews(state.productId);
+  }
+  renderProduct();
+  ui.openSheet('sheetProduct');
+  $('productBody').scrollTop = 0;
+}
+
+async function loadReviews(id) {
+  const { data, error } = await safe(db.from('reviews').select('*').eq('medicine_id', id).eq('is_visible', true).order('created_at', { ascending: false }).limit(20));
+  if (state.reviews.id !== String(id)) return; // user moved on
+  state.reviews = { id: String(id), rows: error ? [] : (data ?? []), error: !!error };
+  if (ui.currentSheet() === 'sheetProduct') renderReviews();
+}
+
+const starsHtml = (n) => {
+  const k = Math.min(5, Math.max(0, Math.round(Number(n) || 0)));
+  return `<span class="stars" aria-label="${esc(t('a11y.stars', { n: k }))}">${'★'.repeat(k)}${'☆'.repeat(5 - k)}</span>`;
+};
+const listHtml = (arr) => (Array.isArray(arr) ? arr : String(arr ?? '').split('\n')).map((x) => String(x).trim()).filter(Boolean);
+
+export function renderProduct() {
+  const m = medById(state.productId);
+  const body = $('productBody');
+  const foot = $('productFoot');
+  if (!m) {
+    body.innerHTML = emptyState('💊', t('shop.emptyCatalog'));
+    foot.hidden = true;
+    return;
+  }
+  const pct = offPct(m);
+  const benefits = listHtml(m.benefits);
+  const sec = (title, inner) => `<section class="psec"><h4>${esc(title)}</h4>${inner}</section>`;
+  const keepScroll = body.scrollTop;
+  body.innerHTML = `
+    <div class="phero">
+      ${mediaHtml(m, 'pmedia big')}
+      <div class="pinfo">
+        <span class="pbadges static">${pct ? `<span class="pb off">${esc(t('shop.off', { pct }))}</span>` : ''}${m.requires_rx ? `<span class="pb rx">${esc(t('shop.rx'))}</span>` : ''}</span>
+        <h3>${esc(m.name)}</h3>
+        <div class="pmeta">${m.brand ? `<span>${esc(t('product.brand'))}: <b>${esc(m.brand)}</b></span>` : ''}${m.pack_size ? `<span>${esc(t('product.pack'))}: <b>${esc(m.pack_size)}</b></span>` : ''}</div>
+        <div class="pprice lg"><b>${esc(inr(m.price))}</b>${pct ? `<s>${esc(t('shop.mrp'))} ${esc(inr(m.mrp))}</s>` : ''}</div>
+        ${stockHtml(m, false)}
+      </div>
+    </div>
+    ${sec(t('product.about'), `<p>${esc(m.description?.trim() || t('product.noDescription'))}</p>`)}
+    ${benefits.length ? sec(t('product.benefits'), `<ul class="plist">${benefits.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>`) : ''}
+    ${m.dosage ? sec(t('product.dosage'), `<p>${esc(m.dosage)}</p>`) : ''}
+    ${m.composition ? sec(t('product.ingredients'), `<p>${esc(m.composition)}</p>`) : ''}
+    <section class="psec" id="reviewsSec"></section>`;
+  renderReviews();
+  body.scrollTop = keepScroll;
+  foot.hidden = false;
+  foot.innerHTML = `<div class="pfoot"><div class="pprice"><b>${esc(inr(m.price))}</b>${pct ? `<s>${esc(inr(m.mrp))}</s>` : ''}</div><div class="pact" data-pact="${esc(m.id)}" data-block="1">${actionHtml(m, { block: true })}</div></div>`;
+  bindActions(foot);
+}
+
+function renderReviews() {
+  const host = $('reviewsSec');
+  const m = medById(state.productId);
+  if (!host || !m) return;
+  const r = state.reviews;
+  const rows = r.rows ?? [];
+  const avg = rows.length ? rows.reduce((a, x) => a + Number(x.rating || 0), 0) / rows.length : 0;
+  const head = `<div class="rhead"><h4>${esc(t('product.reviews'))}</h4>${rows.length ? `<span class="ravg">${starsHtml(avg)} <b>${esc(avg.toFixed(1))}</b> <span class="muted">· ${esc(t('product.reviewCount', { n: rows.length }))}</span></span>` : ''}</div>`;
+  let list;
+  if (r.rows === null) list = ui.skeleton('line', 3);
+  else if (!rows.length) list = `<div class="empty compact"><span class="empty-ico" aria-hidden="true">💬</span><h3>${esc(t('product.noReviews'))}</h3></div>`;
+  else {
+    list = `<ul class="rlist">${rows.map((x) => `<li class="review">
+      <div class="rtop"><b>${esc(x.user_name || t('product.customer'))}</b>${starsHtml(Number(x.rating || 0))}</div>
+      ${x.body ? `<p>${esc(x.body)}</p>` : ''}
+      <time class="muted" datetime="${esc(x.created_at ?? '')}">${esc(x.created_at ? new Date(x.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '')}</time>
+    </li>`).join('')}</ul>`;
+  }
+  const d = state.reviewDraft;
+  const write = state.session
+    ? `<div class="rwrite">
+        <h4>${esc(t('product.writeReview'))}</h4>
+        <div class="rstars" role="radiogroup" aria-label="${esc(t('product.yourRating'))}">
+          ${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="star ${n <= d.rating ? 'on' : ''}" role="radio" aria-checked="${n === d.rating}" data-star="${n}" aria-label="${esc(t('a11y.stars', { n }))}">${n <= d.rating ? '★' : '☆'}</button>`).join('')}
+        </div>
+        <div class="field"><textarea id="reviewBody" maxlength="600" rows="3" placeholder="${esc(t('product.reviewPlaceholder'))}" aria-label="${esc(t('product.writeReview'))}">${esc(d.body)}</textarea><div class="field-err" role="alert" id="reviewErr"></div></div>
+        <button type="button" class="btn btn-teal" data-submit-review><span class="lbl">${esc(t('product.submitReview'))}</span></button>
+      </div>`
+    : `<button type="button" class="btn btn-ghost block" data-signin-review><span class="ico" aria-hidden="true">👤</span><span class="lbl">${esc(t('product.signInToReview'))}</span></button>`;
+  host.innerHTML = head + list + write;
+  host.querySelectorAll('[data-star]').forEach((b) => b.addEventListener('click', () => {
+    state.reviewDraft.rating = Number(b.dataset.star);
+    state.reviewDraft.body = $('reviewBody')?.value ?? state.reviewDraft.body;
+    renderReviews();
+    host.querySelector(`[data-star="${state.reviewDraft.rating}"]`)?.focus();
+  }));
+  $('reviewBody')?.addEventListener('input', (e) => { state.reviewDraft.body = e.target.value; });
+  host.querySelector('[data-submit-review]')?.addEventListener('click', submitReview);
+  host.querySelector('[data-signin-review]')?.addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
+}
+
+async function submitReview() {
+  const m = medById(state.productId);
+  const s = state.session;
+  const btn = $('reviewsSec')?.querySelector('[data-submit-review]');
+  const err = $('reviewErr');
+  if (!m || !s || !btn) return;
+  const rating = state.reviewDraft.rating;
+  const body = ($('reviewBody')?.value ?? '').trim().slice(0, 600);
+  if (!rating) { err.textContent = t('product.ratingRequired'); return; }
+  err.textContent = '';
+  btn.setAttribute('aria-busy', 'true');
+  const { error } = await safe(db.from('reviews').upsert({
+    medicine_id: m.id,
+    user_id: s.user.id,
+    user_name: (s.user.user_metadata?.full_name || s.user.email || 'Customer').slice(0, 60),
+    rating,
+    body,
+    is_visible: true,
+  }, { onConflict: 'medicine_id,user_id' }));
+  btn.removeAttribute('aria-busy');
+  if (error) { ui.toast(error.message || t('product.reviewFailed'), 'err'); return; }
+  ui.toast(t('product.reviewSaved'), 'ok');
+  state.reviewDraft = { rating: 0, body: '' };
+  state.reviews = { id: String(m.id), rows: null, error: false };
+  renderReviews();
+  loadReviews(m.id);
+}
+
+// =====================================================================
+// CART SHEET (#sheetCart): lines → bill → coupon → delivery form → payment → CTA
+// =====================================================================
+// Form draft survives re-renders (qty change, 60s refresh, language switch).
+let draft = null;
+const FIELDS = ['name', 'phone', 'address', 'city', 'pincode'];
+function ensureDraft() {
+  if (!draft) {
+    draft = { couponInput: state.coupon?.code ?? '', errors: {} };
+    FIELDS.forEach((k) => { draft[k] = state.profile?.[k] ?? ''; });
+  }
+  return draft;
+}
+function readForm() {
+  const d = ensureDraft();
+  FIELDS.forEach((k) => { const el = $(`f_${k}`); if (el) d[k] = el.value; });
+  const c = $('couponInput');
+  if (c) d.couponInput = c.value;
+  return d;
+}
+const payMethods = () => {
+  const list = [
+    { id: 'upi', ico: '📱', title: t('checkout.upi'), sub: t('checkout.upiSub') },
+  ];
+  if (state.settings?.razorpay_key_id) list.push({ id: 'razorpay', ico: '💳', title: t('checkout.card'), sub: t('checkout.cardSub') });
+  list.push({ id: 'cod', ico: '💵', title: t('checkout.cod'), sub: t('checkout.codSub') });
+  return list;
+};
+
 export function renderCart() {
   const body = $('cartBody');
-  $('cartFoot').hidden = true;
-  const lines = Object.entries(state.cart)
-    .map(([id, qty]) => ({ m: state.medicines.find((x) => x.id === id), qty: Number(qty) }))
-    .filter((l) => l.m && l.qty > 0);
-  if (!lines.length) {
+  const foot = $('cartFoot');
+  if (state.successOrder) { renderSuccess(state.successOrder); return; }
+  const d = cartDetail();
+  if (!d.lines.length) {
+    foot.hidden = true;
     body.innerHTML = emptyState('🛒', t('cart.empty'), t('cart.emptySub'),
       `<a class="btn btn-teal" href="#pharmacy" data-close-sheet><span class="lbl">${esc(t('cart.browse'))}</span></a>`);
     return;
   }
-  body.innerHTML = `<ul style="list-style:none;margin:0;padding:0">${lines.map(({ m, qty }) =>
-    `<li style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)"><span>${esc(m.name)} <span class="muted">× ${qty}</span></span><b>${inr(Number(m.price) * qty)}</b></li>`).join('')}</ul>
-    <p class="muted" style="margin-top:12px;font-size:var(--fs-sm)">${esc(t('cart.estimate'))}</p>`;
+  if (!payMethods().some((p) => p.id === state.payMethod)) state.payMethod = 'upi';
+  const f = $('checkoutForm') ? readForm() : ensureDraft(); // keep what the user typed
+  const field = (k, label, placeholder, extra = '') => `<div class="field ${f.errors[k] ? 'invalid' : ''}">
+      <label for="f_${k}">${esc(label)}</label>
+      <input id="f_${k}" name="${k}" value="${esc(f[k])}" placeholder="${esc(placeholder)}" ${extra}>
+      <div class="field-err" role="alert">${esc(f.errors[k] ? t(f.errors[k]) : '')}</div>
+    </div>`;
+  const freeDone = d.deliveryFee === 0;
+  const freePct = freeDone || d.freeAbove <= 0 ? 100 : Math.min(100, Math.round(d.subtotal / d.freeAbove * 100));
+  body.innerHTML = `
+    <ul class="clines">${d.lines.map(({ m, qty }) => `<li class="cline" data-id="${esc(m.id)}">
+        ${mediaHtml(m, 'pmedia sm')}
+        <div class="cinfo">
+          <b class="cname">${esc(m.name)}</b>
+          <span class="muted cpack">${esc(m.pack_size ?? '')}${m.requires_rx ? ` · <span class="pb rx">${esc(t('shop.rx'))}</span>` : ''}</span>
+          <span class="cprice">${esc(inr(m.price))} × ${qty} = <b>${esc(inr(Number(m.price) * qty))}</b></span>
+        </div>
+        <div class="cact">
+          <div class="pact" data-pact="${esc(m.id)}">${actionHtml(m)}</div>
+          <button type="button" class="btn btn-link sm" data-remove="${esc(m.id)}">${esc(t('common.remove'))}</button>
+        </div>
+      </li>`).join('')}</ul>
+
+    ${d.freeAbove > 0 ? `<div class="freebar ${freeDone ? 'done' : ''}">
+      <span>${freeDone ? '🎉 ' + esc(t('cart.freeUnlocked')) : '🚚 ' + esc(t('cart.moreForFree', { amount: inr(d.moreForFree) }))}</span>
+      <div class="pbar ${freeDone ? 'done' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${freePct}"><div class="pbar-fill" style="--p:${freePct}%"></div></div>
+    </div>` : ''}
+
+    ${d.needsRx ? `<p class="note rx"><span class="ico" aria-hidden="true">📋</span> ${esc(t('cart.rxNote'))}</p>` : ''}
+
+    <div class="coupon">
+      <label class="sr-only" for="couponInput">${esc(t('cart.coupon'))}</label>
+      <input id="couponInput" value="${esc(f.couponInput)}" placeholder="${esc(t('cart.couponPlaceholder'))}" autocapitalize="characters" autocomplete="off" ${state.coupon ? 'readonly' : ''}>
+      ${state.coupon
+        ? `<button type="button" class="btn btn-ghost" data-coupon-remove><span class="lbl">${esc(t('common.remove'))}</span></button>`
+        : `<button type="button" class="btn btn-ghost" data-coupon-apply><span class="lbl">${esc(t('cart.apply'))}</span></button>`}
+    </div>
+    <div class="coupon-msg ${state.couponMsg ? (state.couponMsg.ok ? 'ok' : 'err') : ''}" role="status">${esc(state.couponMsg?.text ?? '')}</div>
+
+    <dl class="bill">
+      <div><dt>${esc(t('cart.itemsTotal'))}</dt><dd>${esc(inr(d.subtotal))}</dd></div>
+      <div><dt>${esc(t('cart.delivery'))}</dt><dd>${d.deliveryFee ? esc(inr(d.deliveryFee)) : `<span class="free">${esc(t('common.free'))}</span>`}</dd></div>
+      ${d.discount ? `<div class="disc"><dt>${esc(t('cart.discount'))} <span class="muted">(${esc(state.coupon?.code ?? '')})</span></dt><dd>− ${esc(inr(d.discount))}</dd></div>` : ''}
+      ${d.savings + d.discount > 0 ? `<div class="save"><dt>${esc(t('cart.youSave'))}</dt><dd>${esc(inr(d.savings + d.discount))}</dd></div>` : ''}
+      <div class="total"><dt>${esc(t('cart.toPay'))}</dt><dd>${esc(inr(d.total))}</dd></div>
+    </dl>
+    <p class="muted hint">${esc(t('cart.estimate'))}</p>
+
+    <h3 class="csec">${esc(t('checkout.title'))}</h3>
+    <form id="checkoutForm" novalidate autocomplete="on">
+      ${field('name', t('checkout.name'), t('checkout.namePlaceholder'), 'autocomplete="name"')}
+      ${field('phone', t('checkout.phone'), t('checkout.phonePlaceholder'), 'inputmode="numeric" autocomplete="tel-national" maxlength="14"')}
+      ${field('address', t('checkout.address'), t('checkout.addressPlaceholder'), 'autocomplete="street-address"')}
+      <div class="field-row">
+        ${field('city', t('checkout.city'), t('checkout.city'), 'autocomplete="address-level2"')}
+        ${field('pincode', t('checkout.pincode'), '000000', 'inputmode="numeric" maxlength="6" autocomplete="postal-code"')}
+      </div>
+    </form>
+
+    <h3 class="csec">${esc(t('checkout.payment'))}</h3>
+    <div class="payopts" role="radiogroup" aria-label="${esc(t('checkout.payment'))}">
+      ${payMethods().map((p) => `<label class="payopt ${state.payMethod === p.id ? 'on' : ''}">
+        <input type="radio" name="pay" value="${p.id}" ${state.payMethod === p.id ? 'checked' : ''}>
+        <span class="ico" aria-hidden="true">${p.ico}</span>
+        <span class="ptxt"><b>${esc(p.title)}</b><small>${esc(p.sub)}</small></span>
+        <span class="pcheck" aria-hidden="true"></span>
+      </label>`).join('')}
+    </div>
+    <p class="muted hint">${esc(t('checkout.serverNote'))}</p>
+    ${state.session ? '' : `<button type="button" class="btn btn-link block nudge" data-signin><span class="ico" aria-hidden="true">👤</span><span class="lbl">${esc(t('checkout.signInNudge'))}</span></button>`}
+  `;
+  foot.hidden = false;
+  foot.innerHTML = `<button type="button" class="btn btn-gold block" id="placeBtn" ${state.placing ? 'aria-busy="true"' : ''} ${d.lines.length ? '' : 'disabled'}><span class="lbl">${esc(state.placing ? t('checkout.placing') : t('checkout.placeOrder', { amount: inr(d.total) }))}</span></button>`;
+
+  // wiring
+  bindActions(body);
+  body.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => setQty(b.dataset.remove, 0)));
+  body.querySelectorAll('.payopt input').forEach((r) => r.addEventListener('change', () => {
+    state.payMethod = r.value;
+    body.querySelectorAll('.payopt').forEach((l) => l.classList.toggle('on', l.querySelector('input').value === r.value));
+  }));
+  FIELDS.forEach((k) => $(`f_${k}`)?.addEventListener('input', (e) => {
+    f[k] = e.target.value;
+    if (f.errors[k]) { delete f.errors[k]; e.target.closest('.field').classList.remove('invalid'); e.target.closest('.field').querySelector('.field-err').textContent = ''; }
+  }));
+  $('checkoutForm').addEventListener('submit', (e) => { e.preventDefault(); placeOrder(); }); // Enter key = place order, never a page reload
+  $('couponInput')?.addEventListener('input', (e) => { f.couponInput = e.target.value; });
+  $('couponInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applyCoupon(); } });
+  body.querySelector('[data-coupon-apply]')?.addEventListener('click', applyCoupon);
+  body.querySelector('[data-coupon-remove]')?.addEventListener('click', () => {
+    state.coupon = null; state.couponMsg = null;
+    $('couponInput').value = '';
+    ui.toast(t('cart.couponRemoved'), 'info');
+    renderCart();
+  });
+  body.querySelector('[data-signin]')?.addEventListener('click', () => { readForm(); renderAccount(); ui.openSheet('sheetAccount'); });
+  $('placeBtn').addEventListener('click', placeOrder);
+}
+
+async function applyCoupon() {
+  const f = readForm();
+  const code = f.couponInput.trim().toUpperCase();
+  const btn = $('cartBody').querySelector('[data-coupon-apply]');
+  if (!code || !btn) return;
+  btn.setAttribute('aria-busy', 'true');
+  const { data, error } = await safe(db.rpc('check_coupon', { p_code: code, p_subtotal: cartDetail().subtotal }));
+  btn.removeAttribute('aria-busy');
+  if (error) {
+    state.coupon = null;
+    state.couponMsg = { text: error.message || t('cart.couponError'), ok: false };
+    ui.toast(t('cart.couponError'), 'err');
+  } else {
+    const r = Array.isArray(data) ? data[0] : data;
+    const valid = !!r?.valid;
+    state.coupon = valid ? { code, discount: Number(r.discount ?? 0), message: r.message ?? '' } : null;
+    state.couponMsg = { text: r?.message || t(valid ? 'cart.couponApplied' : 'cart.couponInvalid'), ok: valid };
+    ui.toast(t(valid ? 'cart.couponApplied' : 'cart.couponInvalid'), valid ? 'ok' : 'err');
+  }
+  if (ui.currentSheet() === 'sheetCart') renderCart();
+}
+
+// =====================================================================
+// PLACE ORDER → success view
+// =====================================================================
+function validateForm(f) {
+  const errors = {};
+  const phone = digits(f.phone);
+  if (f.name.trim().length < 2) errors.name = 'checkout.errName';
+  if (!/^\d{10}$/.test(phone)) errors.phone = 'checkout.errPhone';
+  if (!f.address.trim()) errors.address = 'checkout.errAddress';
+  if (!f.city.trim()) errors.city = 'checkout.errCity';
+  if (!/^\d{6}$/.test(f.pincode.trim())) errors.pincode = 'checkout.errPincode';
+  return { errors, phone };
+}
+
+export async function placeOrder() {
+  if (state.placing) return;
+  const d = cartDetail();
+  if (!d.lines.length) return;
+  const f = readForm();
+  const { errors, phone } = validateForm(f);
+  f.errors = errors;
+  if (Object.keys(errors).length) {
+    renderCart();
+    $(`f_${Object.keys(errors)[0]}`)?.focus();
+    return;
+  }
+  state.placing = true;
+  renderCart();
+  const method = state.payMethod;
+  const orderNumber = 'SS-' + Date.now().toString(36).toUpperCase();
+  const name = f.name.trim();
+  const address = f.address.trim();
+  const city = f.city.trim();
+  const pincode = f.pincode.trim();
+  const { data, error } = await safe(db.rpc('place_order', {
+    p_order_number: orderNumber,
+    p_items: d.lines.map((l) => ({ medicine_id: l.m.id, qty: l.qty })),
+    p_customer_name: name,
+    p_phone: phone,
+    p_address: address,
+    p_city: city,
+    p_pincode: pincode,
+    p_payment_method: method,
+    p_prescription_url: null,
+    p_coupon_code: state.coupon?.code ?? null,
+  }));
+  state.placing = false;
+  const r = Array.isArray(data) ? data[0] : data;
+  if (error || !r) {
+    ui.toast(error?.message || t('checkout.failed'), 'err', 5000);
+    if (ui.currentSheet() === 'sheetCart') renderCart();
+    return;
+  }
+  // Server totals are authoritative from here on.
+  const order = {
+    id: r.id ?? null,
+    orderNumber: r.order_number ?? orderNumber,
+    name, phone, address, city, pincode,
+    payMethod: method,
+    subtotal: Number(r.subtotal ?? 0),
+    deliveryFee: Number(r.delivery_fee ?? 0),
+    discount: Number(r.discount ?? 0),
+    couponCode: state.coupon?.code ?? null,
+    total: Number(r.total ?? 0),
+    needsRx: !!r.needs_rx,
+    status: 'placed',
+    payStatus: 'pending',
+    claimed: false,
+    claimedRef: null,
+    createdAt: new Date().toISOString(),
+    items: d.lines.map(({ m, qty }) => ({ medicineId: m.id, name: m.name, packSize: m.pack_size ?? '', price: Number(m.price), qty })),
+  };
+  state.orders.unshift(order);
+  state.orders = state.orders.slice(0, 30);
+  saveOrders();
+  state.profile = { name, phone, address, city, pincode };
+  saveProfile();
+  state.cart = {};
+  saveCart();
+  state.coupon = null;
+  state.couponMsg = null;
+  draft = null;
+  renderCartBadge();
+  renderCartBar();
+  state.successOrder = order;
+  if (ui.currentSheet() === 'sheetCart') renderSuccess(order);
+  else { renderCart(); ui.openSheet('sheetCart', { onClose: () => { state.successOrder = null; } }); }
+  loadAll(); // fresh stock
+}
+
+// ---------------- payment helpers (shared with My orders in FEAT-004) ----------------
+// UPI: navigate to the deep link; if the tab never left (desktop, no handler) hint after 1.5s.
+export function payUpi(order) {
+  let left = false;
+  const onVis = () => { if (document.hidden) left = true; };
+  document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('blur', () => { left = true; }, { once: true });
+  setTimeout(() => {
+    document.removeEventListener('visibilitychange', onVis);
+    if (!left) ui.toast(t('pay.noUpiApp'), 'info', 5000);
+  }, 1500);
+  location.href = upiUrl(order.total, 'Order ' + order.orderNumber);
+}
+
+export async function openRazorpay(order, btn) {
+  btn?.setAttribute('aria-busy', 'true');
+  ui.toast(t('pay.opening'), 'info', 2000);
+  const { data, error } = await safe(db.functions.invoke('create-payment-link', {
+    body: { orderNumber: order.orderNumber, customerName: order.name, phone: order.phone },
+  }));
+  btn?.removeAttribute('aria-busy');
+  if (error || !data?.url) { ui.toast(t('pay.razorpayFailed'), 'err'); return; }
+  ui.openExternal(data.url);
+}
+
+export function sendOrderWhatsApp(order, extra = '') {
+  ui.openExternal(waHref(waOrderMessage(order) + (extra ? `\n\n${extra}` : '')));
+}
+
+function renderSuccess(o) {
+  const body = $('cartBody');
+  const foot = $('cartFoot');
+  const total = inr(o.total);
+  const pay = o.payMethod === 'upi'
+    ? `<button type="button" class="btn btn-gold block" data-pay-upi><span class="ico" aria-hidden="true">📱</span><span class="lbl">${esc(t('success.payUpi', { amount: total }))}</span></button>
+       <p class="muted hint">${esc(t('success.payLater'))}</p>`
+    : o.payMethod === 'razorpay'
+      ? `<button type="button" class="btn btn-gold block" data-pay-card><span class="ico" aria-hidden="true">💳</span><span class="lbl">${esc(t('success.payCard', { amount: total }))}</span></button>
+         <p class="muted hint">${esc(t('success.payLater'))}</p>`
+      : `<p class="note cod"><span class="ico" aria-hidden="true">💵</span> ${esc(t('success.codNote', { amount: total }))}</p>`;
+  body.innerHTML = `<div class="success">
+    <div class="tick" aria-hidden="true"><svg viewBox="0 0 52 52"><circle class="tick-c" cx="26" cy="26" r="24"/><path class="tick-p" d="M14 27l8 8 16-16"/></svg></div>
+    <h3>${esc(t('success.title'))}</h3>
+    <p class="onum"><b>${esc(o.orderNumber)}</b> · ${esc(total)}</p>
+    <p class="muted">${esc(t('success.sub'))}</p>
+    <dl class="bill compact">
+      <div><dt>${esc(t('cart.itemsTotal'))}</dt><dd>${esc(inr(o.subtotal))}</dd></div>
+      <div><dt>${esc(t('cart.delivery'))}</dt><dd>${o.deliveryFee ? esc(inr(o.deliveryFee)) : `<span class="free">${esc(t('common.free'))}</span>`}</dd></div>
+      ${o.discount ? `<div class="disc"><dt>${esc(t('cart.discount'))}${o.couponCode ? ` <span class="muted">(${esc(o.couponCode)})</span>` : ''}</dt><dd>− ${esc(inr(o.discount))}</dd></div>` : ''}
+      <div class="total"><dt>${esc(t('cart.toPay'))}</dt><dd>${esc(total)}</dd></div>
+    </dl>
+    <div class="sactions">
+      ${pay}
+      ${o.needsRx ? `<button type="button" class="btn btn-wa block" data-rx><span class="ico" aria-hidden="true">📋</span><span class="lbl">${esc(t('success.rxNeeded'))}</span></button>` : ''}
+      ${state.settings?.whatsapp ? `<button type="button" class="btn ${o.needsRx ? 'btn-ghost' : 'btn-wa'} block" data-wa><span class="ico" aria-hidden="true">💬</span><span class="lbl">${esc(t('success.sendWhatsApp'))}</span></button>` : ''}
+      <div class="btn-row two">
+        <button type="button" class="btn btn-ghost" data-track><span class="ico" aria-hidden="true">📦</span><span class="lbl">${esc(t('success.track'))}</span></button>
+        <button type="button" class="btn btn-ghost" data-continue><span class="ico" aria-hidden="true">🛍️</span><span class="lbl">${esc(t('success.continue'))}</span></button>
+      </div>
+      ${state.session ? `<p class="muted hint">${esc(t('checkout.guestNote'))}</p>` : `<button type="button" class="btn btn-link block nudge" data-signin><span class="ico" aria-hidden="true">👤</span><span class="lbl">${esc(t('checkout.signInNudge'))}</span></button>`}
+    </div>
+  </div>`;
+  foot.hidden = true;
+  body.scrollTop = 0;
+  body.querySelector('[data-pay-upi]')?.addEventListener('click', () => payUpi(o));
+  body.querySelector('[data-pay-card]')?.addEventListener('click', (e) => openRazorpay(o, e.currentTarget));
+  body.querySelector('[data-rx]')?.addEventListener('click', () => sendOrderWhatsApp(o, `📎 Prescription for Order No ${o.orderNumber} attached below.`));
+  body.querySelector('[data-wa]')?.addEventListener('click', () => sendOrderWhatsApp(o));
+  body.querySelector('[data-track]')?.addEventListener('click', () => { state.successOrder = null; ui.closeSheet(); location.hash = '#orders'; });
+  body.querySelector('[data-continue]')?.addEventListener('click', () => { state.successOrder = null; ui.closeSheet(); if (state.route.name !== 'pharmacy') location.hash = '#pharmacy'; });
+  body.querySelector('[data-signin]')?.addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
 }
 
 // Book: "how it works" + my-appointments empty state; the form arrives in FEAT-005.
@@ -640,6 +1257,8 @@ export function renderAccount() {
 function paintAuth() {
   $('accountDot').hidden = !state.session;
   if (ui.currentSheet() === 'sheetAccount') renderAccount();
+  if (ui.currentSheet() === 'sheetProduct') renderReviews();   // write-review block depends on session
+  if (ui.currentSheet() === 'sheetCart') renderCart();         // sign-in nudge
 }
 db.auth.onAuthStateChange((_e, s) => { state.session = s; paintAuth(); renderBook(); });
 db.auth.getSession().then(({ data }) => { state.session = data.session; paintAuth(); });
@@ -652,8 +1271,8 @@ function initChrome() {
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
 
-  $('cartBtn').addEventListener('click', () => { renderCart(); ui.openSheet('sheetCart'); });
-  $('cartBtnBar').addEventListener('click', () => { renderCart(); ui.openSheet('sheetCart'); });
+  $('cartBtn').addEventListener('click', openCart);
+  $('cartBtnBar').addEventListener('click', openCart);
   $('accountBtn').addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
   $('menuAccount').addEventListener('click', () => { renderAccount(); ui.openSheet('sheetAccount'); });
   $('menuBtn').addEventListener('click', () => ui.openSheet('sheetMenu'));
@@ -668,11 +1287,12 @@ function initChrome() {
   const seg = $('ordersFilter');
   initSeg(seg, (b) => { state.ordersFilter = b.dataset.filter; setSegValue(seg, 'filter', b.dataset.filter); renderOrders(); });
 
-  // search field shell (FEAT-002 wires filtering); keep the clear button honest
+  // pharmacy search: filter the grid 300ms after the last keystroke; clear = instant
   const search = $('search');
   const clear = $('searchClear');
-  search.addEventListener('input', () => { state.query = search.value.trim(); clear.hidden = !search.value; });
-  clear.addEventListener('click', () => { search.value = ''; state.query = ''; clear.hidden = true; search.focus(); renderPharmacy(); });
+  search.addEventListener('input', () => { state.query = search.value.trim(); clear.hidden = !search.value; renderGridDebounced(); });
+  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); renderGrid(); } });
+  clear.addEventListener('click', () => { search.value = ''; state.query = ''; clear.hidden = true; search.focus(); renderGrid(); });
 }
 
 // ---------------- boot ----------------
@@ -686,7 +1306,7 @@ loadAll();
 
 onLangChange(() => {
   syncLangSegs();
-  renderAll();
+  renderAll(true);
 });
 window.addEventListener('hashchange', router);
 setInterval(loadAll, 60_000);
