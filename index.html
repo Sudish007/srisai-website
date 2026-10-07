@@ -348,8 +348,9 @@
     <h2 class="confirm-title" id="confirmTitle"></h2>
     <p class="confirm-body" id="confirmBody"></p>
     <div class="confirm-actions">
-      <button type="button" class="btn btn-ghost confirm-cancel" data-i18n="common.cancel">Cancel</button>
-      <button type="button" class="btn btn-teal confirm-ok" data-autofocus data-i18n="common.confirm">Confirm</button>
+      <!-- labels are set per call by ui.confirm() (no data-i18n: applyTranslations must not overwrite them) -->
+      <button type="button" class="btn btn-ghost confirm-cancel">Cancel</button>
+      <button type="button" class="btn btn-teal confirm-ok" data-autofocus>Confirm</button>
     </div>
   </div>
 </div>
