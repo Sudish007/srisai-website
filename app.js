@@ -118,15 +118,19 @@ function paintThemeIcons() {
   document.querySelectorAll('[data-theme-toggle] .ico').forEach((el) => { el.textContent = ico; });
 }
 function initTheme() {
-  const saved = localStorage.getItem(LS.theme);
-  if (saved === 'light' || saved === 'dark') html.dataset.theme = saved;
-  paintThemeIcons();
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeIcons);
-  document.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', () => {
-    const next = isDark() ? 'light' : 'dark';
-    html.dataset.theme = next;
-    localStorage.setItem(LS.theme, next);
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  // Always mirror the effective theme onto <html> so the `[data-theme="dark"]`
+  // component overrides apply under system dark mode too, not only after a manual toggle.
+  const apply = () => {
+    const saved = localStorage.getItem(LS.theme);
+    html.dataset.theme = (saved === 'light' || saved === 'dark') ? saved : (mq.matches ? 'dark' : 'light');
     paintThemeIcons();
+  };
+  apply();
+  mq.addEventListener('change', apply);
+  document.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', () => {
+    localStorage.setItem(LS.theme, isDark() ? 'light' : 'dark');
+    apply();
   }));
 }
 
