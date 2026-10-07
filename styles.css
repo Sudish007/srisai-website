@@ -551,12 +551,70 @@ html:is([lang="hi"], [lang="bho"]) .foot-brand { font-family: var(--font-display
 .menu-sec { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin: var(--sp-4) 12px var(--sp-2); }
 .divider { height: 1px; background: var(--border); margin: var(--sp-3) 0; }
 
+/* ---------- my orders ---------- */
+.sync { font-size: var(--fs-xs); margin: 4px 0 0; }
+.olist { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-4); }
+.ocard { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.ohead { display: flex; justify-content: space-between; gap: var(--sp-3); align-items: flex-start; }
+.onum { font-weight: 800; font-size: var(--fs-md); letter-spacing: .02em; }
+.ometa { display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
+.ototal { font-weight: 800; font-size: var(--fs-lg); color: var(--navy-700); white-space: nowrap; }
+[data-theme="dark"] .ototal { color: var(--teal-400); }
+.opills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill-cod { background: var(--gold-50); color: #8a4b08; }
+[data-theme="dark"] .pill-cod { color: var(--gold-400); }
+.ocard .timeline { padding: var(--sp-2) 0 0; }
+.hint.left { text-align: left; margin: 0; }
+.oactions { display: flex; flex-wrap: wrap; gap: 8px; }
+.oactions .btn { min-inline-size: 0; }
+.btn-ghost.danger { color: var(--danger); border-color: var(--danger-50); }
+.btn-ghost.danger:hover { background: var(--danger-50); }
+.claim { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px; background: var(--surface-2); border-radius: var(--r-md); }
+.claim input { flex: 1 1 180px; min-height: 40px; padding: 8px 12px; font-size: 15px; border: 1.5px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text); }
+.claim input:focus { outline: none; border-color: var(--teal-500); box-shadow: 0 0 0 3px rgba(0,184,148,.18); }
+.otoggle { align-self: center; }
+.odetails { border-top: 1px dashed var(--border); padding-top: var(--sp-3); display: grid; gap: var(--sp-4); }
+.osub { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+.oitems { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-sm); }
+.oitems li { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.oitems .muted { font-size: var(--fs-xs); }
+.oaddr { font-size: var(--fs-sm); line-height: 1.5; }
+.ocard .bill { margin-top: 0; }
+
+/* ---------- account / auth ---------- */
+.auth { display: flex; flex-direction: column; gap: var(--sp-3); }
+.auth .sub { color: var(--muted); font-size: var(--fs-sm); text-align: center; margin: 0; }
+.auth form { display: flex; flex-direction: column; gap: var(--sp-2); }
+.auth .field { margin-bottom: 0; }
+.auth .seg { margin: 2px 0 var(--sp-2); }
+.btn-google { gap: 10px; }
+.g-logo { width: 20px; height: 20px; flex: none; }
+.or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.sent { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: var(--fs-sm); word-break: break-all; margin: 0; }
+.field input.code-input { text-align: center; letter-spacing: .5em; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.acct-head { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: var(--sp-2) 0; }
+.acct-head .ico { font-size: 36px; }
+.acct-head .muted { font-size: var(--fs-xs); }
+.acct-head b { word-break: break-all; }
+.acct-head .hint { margin: 2px 0 0; }
+
 /* ---------- print area ---------- */
 #printArea { display: none; }
 @media print {
   body > *:not(#printArea) { display: none !important; }
   #printArea { display: block; color: #000; background: #fff; font-family: var(--font-ui); padding: 16px; }
   body { padding: 0; background: #fff; }
+  .pbill .pb-head { text-align: center; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 14px; }
+  .pbill h1 { font-size: 22px; margin: 0; color: #000; }
+  .pbill h2 { font-size: 16px; margin: 0 0 10px; color: #000; }
+  .pbill .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; line-height: 1.45; }
+  .pbill table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+  .pbill th, .pbill td { border-bottom: 1px solid #999; padding: 6px 4px; text-align: left; vertical-align: top; }
+  .pbill th.num, .pbill td.num { text-align: right; white-space: nowrap; }
+  .pbill .tot { text-align: right; font-size: 13px; line-height: 1.6; }
+  .pbill .tot b { font-size: 16px; }
+  .pbill .thanks { text-align: center; margin-top: 18px; font-weight: 700; }
 }
 
 /* ---------- legal pages ---------- */
