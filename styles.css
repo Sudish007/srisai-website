@@ -4,45 +4,56 @@
    ========================================================================== */
 
 /* ---------- A1 palette + semantic tokens ---------- */
+/* Two :root blocks on purpose: the first holds every token the inline <style id="critical"> in
+   index.html references (it is copied there verbatim, 8 KB budget); the second holds tokens only
+   used below the fold / by later components. Both must stay ahead of [data-theme="dark"]. */
+:root {
+  --bg:#f0f5ff; --surface:#ffffff; --surface-2:#f7fafd; --text:#1a2332; --muted:#5a6a7e;
+  --border:#e3eaf3; --on-gold:#3d2200;
+  --glass:rgba(255,255,255,.78); --glass-border:rgba(227,234,243,.9);
+  --grad-hero:linear-gradient(135deg,#0a1628 0%,#0f4c75 55%,#205295 100%);
+  --grad-teal:linear-gradient(135deg,#00b894,#00cec9);
+  --grad-gold:linear-gradient(135deg,#fdcb6e,#e17f2e);
+  --sk-a:#edf2fa; --sk-b:#f7faff;
+
+  /* A2 type */
+  --font-ui:"DM Sans","Noto Sans Devanagari",system-ui,-apple-system,"Segoe UI","Nirmala UI",sans-serif;
+  --font-display:"Playfair Display",Georgia,serif;
+  --fs-xs:clamp(.72rem,.68rem + .2vw,.78rem);  --fs-sm:clamp(.82rem,.78rem + .25vw,.9rem);
+  --fs-md:clamp(.95rem,.9rem + .3vw,1.05rem);  --fs-lg:clamp(1.1rem,1rem + .6vw,1.3rem);
+  --fs-hero:clamp(2.1rem,1.5rem + 4.2vw,3.8rem);
+  --lh-tight:1.15; --lh-body:1.55;
+
+  /* A3 spacing, radii, shadows, motion, z */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px; --sp-10:40px; --sp-12:48px; --sp-16:64px;
+  --r-md:16px; --r-lg:24px; --r-pill:999px;
+  --sh-1:0 1px 2px rgba(10,22,40,.06),0 4px 16px rgba(15,76,117,.08);
+  --sh-gold:0 10px 28px rgba(225,127,46,.38);
+  --ease:cubic-bezier(.4,0,.2,1);
+  --t-fast:.16s; --t-med:.3s; --t-slow:.6s;
+  --tap:44px;
+  --safe-b:env(safe-area-inset-bottom,0px);
+  --header-h:64px; --bottombar-h:calc(62px + var(--safe-b));
+  --z-header:40; --z-bottombar:45;
+  color-scheme: light;
+}
 :root {
   --navy-900:#0a1628; --navy-800:#0a2647; --navy-700:#0f4c75; --navy-500:#3282b8;
   --teal-500:#00b894; --teal-400:#00cec9; --teal-600:#00997b; --teal-50:#e6f9f4;
   --gold-400:#fdcb6e; --gold-600:#e17f2e; --gold-50:#fff3d9;
   --danger:#dc2626; --danger-50:#fee2e2; --info:#0369a1; --info-50:#e0f2fe;
   --wa:#25d366; --wa-dark:#128c7e;
-  --bg:#f0f5ff; --surface:#ffffff; --surface-2:#f7fafd; --text:#1a2332; --muted:#5a6a7e;
-  --faint:#8e9bae; --border:#e3eaf3; --on-brand:#ffffff; --on-gold:#3d2200;
-  --glass:rgba(255,255,255,.78); --glass-border:rgba(227,234,243,.9);
-  --grad-hero:linear-gradient(135deg,#0a1628 0%,#0f4c75 55%,#205295 100%);
-  --grad-teal:linear-gradient(135deg,#00b894,#00cec9);
-  --grad-gold:linear-gradient(135deg,#fdcb6e,#e17f2e);
+  --faint:#8e9bae; --on-brand:#ffffff;
   --grad-turn:linear-gradient(135deg,#92400e,#d97706);
-  --sk-a:#edf2fa; --sk-b:#f7faff;
-
-  /* A2 type */
-  --font-ui:"DM Sans","Noto Sans Devanagari",system-ui,-apple-system,"Segoe UI","Nirmala UI",sans-serif;
-  --font-display:"Playfair Display",Georgia,serif;
   --font-display-deva:"Noto Sans Devanagari","Nirmala UI","Mangal","DM Sans",system-ui,sans-serif;
-  --fs-xs:clamp(.72rem,.68rem + .2vw,.78rem);  --fs-sm:clamp(.82rem,.78rem + .25vw,.9rem);
-  --fs-md:clamp(.95rem,.9rem + .3vw,1.05rem);  --fs-lg:clamp(1.1rem,1rem + .6vw,1.3rem);
   --fs-xl:clamp(1.5rem,1.2rem + 1.6vw,2.1rem); --fs-2xl:clamp(1.9rem,1.4rem + 2.8vw,3rem);
-  --fs-hero:clamp(2.1rem,1.5rem + 4.2vw,3.8rem); --fs-token:clamp(4rem,2.5rem + 9vw,6.5rem);
-  --lh-tight:1.15; --lh-body:1.55;
-
-  /* A3 spacing, radii, shadows, motion, z */
-  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px; --sp-10:40px; --sp-12:48px; --sp-16:64px;
-  --r-sm:10px; --r-md:16px; --r-lg:24px; --r-xl:32px; --r-pill:999px;
-  --sh-1:0 1px 2px rgba(10,22,40,.06),0 4px 16px rgba(15,76,117,.08);
+  --fs-token:clamp(4rem,2.5rem + 9vw,6.5rem);
+  --r-sm:10px; --r-xl:32px;
   --sh-2:0 2px 6px rgba(10,22,40,.08),0 10px 36px rgba(15,76,117,.14);
   --sh-3:0 8px 24px rgba(10,22,40,.14),0 24px 64px rgba(15,76,117,.2);
-  --sh-teal:0 8px 22px rgba(0,184,148,.32); --sh-gold:0 10px 28px rgba(225,127,46,.38);
-  --ease:cubic-bezier(.4,0,.2,1); --ease-spring:cubic-bezier(.34,1.56,.64,1);
-  --t-fast:.16s; --t-med:.3s; --t-slow:.6s;
-  --tap:44px;
-  --safe-b:env(safe-area-inset-bottom,0px);
-  --header-h:64px; --bottombar-h:calc(62px + var(--safe-b));
-  --z-header:40; --z-bottombar:45; --z-fab:46; --z-overlay:60; --z-sheet:70; --z-toast:90;
-  color-scheme: light;
+  --sh-teal:0 8px 22px rgba(0,184,148,.32);
+  --ease-spring:cubic-bezier(.34,1.56,.64,1);
+  --z-fab:46; --z-overlay:60; --z-sheet:70; --z-toast:90;
 }
 
 [data-theme="dark"] {
@@ -95,6 +106,8 @@ p { margin: 0; }
 /* ---------- section scaffolding ---------- */
 .screen { display: none; padding-bottom: var(--sp-10); }
 .screen.on { display: block; }
+/* head script sets html.deep on #pharmacy/#book/… deep links so the static home hero never flashes before router() */
+html.deep .screen.on { display: none; }
 .sec { padding: var(--sp-10) 0 0; }
 .sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-5); }
 .sec-head h2 { font-size: var(--fs-xl); }
@@ -549,8 +562,9 @@ html:is([lang="hi"], [lang="bho"]) .foot-brand { font-family: var(--font-display
 .empty-ico { font-size: 40px; }
 .empty h3 { color: var(--text); font-family: var(--font-ui); font-size: var(--fs-md); }
 .empty .btn { margin-top: var(--sp-2); }
-.reveal { opacity: 0; transform: translateY(18px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
-.reveal.in { opacity: 1; transform: none; }
+/* scroll reveal is opt-in via html.js (added by app.js at boot) so the static skeletons paint before any JS runs */
+.js .reveal { opacity: 0; transform: translateY(18px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
+.js .reveal.in { opacity: 1; transform: none; }
 .menu-list { display: flex; flex-direction: column; gap: 4px; }
 .menu-item { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 12px; border-radius: var(--r-md); color: var(--text); font-weight: 600; width: 100%; text-align: left; }
 .menu-item:hover { background: var(--surface-2); }
@@ -737,7 +751,7 @@ body.legal-page { padding-bottom: 0; }
 /* ---------- reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
-  .reveal { opacity: 1; transform: none; }
+  .js .reveal { opacity: 1; transform: none; }
   .tick-c, .tick-p { stroke-dashoffset: 0; }
   .tcard.turn { box-shadow: 0 0 0 6px rgba(253,203,110,.55), var(--sh-2); }
   .ticker-inner.marquee { animation: none; padding-left: var(--sp-4); overflow: hidden; text-overflow: ellipsis; }

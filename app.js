@@ -237,6 +237,7 @@ export function router() {
   const prev = state.route;
   state.route = r;
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.dataset.screen === r.name));
+  document.documentElement.classList.remove('deep'); // head script hid the static home screen on deep links
   document.querySelectorAll('.hdr-nav a, .bottombar .bb-item[href]').forEach((a) => {
     if (a.getAttribute('href') === '#' + r.name) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
@@ -2434,7 +2435,11 @@ initChrome();
 initCarousel();
 initLangSegs();
 hydrateFromCache(); // repeat visit: paint saved content before supabase-js is even fetched
+document.documentElement.classList.add('js'); // enables the scroll-reveal animation (.js .reveal) — skeletons stay visible until here
 router();
+// router() only draws the active screen; with cached settings the chrome (Call/WhatsApp links,
+// footer, cart badge) must be drawn now too — loadAll() skips renderAll() when nothing changed.
+if (hadCache) { renderChrome(); renderCartBadge(); renderCartBar(); }
 loadAll();
 if (activeToken()) startTokenPoll(); // keep today's token status fresh even off the token screen
 
