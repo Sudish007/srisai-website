@@ -20,9 +20,9 @@
   --sk-a:#edf2fa; --sk-b:#f7faff;
 
   /* A2 type */
-  --font-ui:"DM Sans","Noto Sans Devanagari",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-ui:"DM Sans","Noto Sans Devanagari",system-ui,-apple-system,"Segoe UI","Nirmala UI",sans-serif;
   --font-display:"Playfair Display",Georgia,serif;
-  --font-display-deva:"Noto Sans Devanagari","DM Sans",sans-serif;
+  --font-display-deva:"Noto Sans Devanagari","Nirmala UI","Mangal","DM Sans",system-ui,sans-serif;
   --fs-xs:clamp(.72rem,.68rem + .2vw,.78rem);  --fs-sm:clamp(.82rem,.78rem + .25vw,.9rem);
   --fs-md:clamp(.95rem,.9rem + .3vw,1.05rem);  --fs-lg:clamp(1.1rem,1rem + .6vw,1.3rem);
   --fs-xl:clamp(1.5rem,1.2rem + 1.6vw,2.1rem); --fs-2xl:clamp(1.9rem,1.4rem + 2.8vw,3rem);
