@@ -24,7 +24,7 @@ function report(name, problems) {
 }
 
 // 1. required files
-const REQUIRED = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'ui.js', 'privacy.html', 'terms.html', '.gitignore'];
+const REQUIRED = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'ui.js', 'content-i18n.js', 'privacy.html', 'terms.html', '.gitignore'];
 {
   const problems = REQUIRED.filter((f) => !existsSync(resolve(root, f))).map((f) => `missing ${f}`);
   if (existsSync(resolve(root, '.gitignore')) && !/^\.agents\/?\s*$/m.test(read('.gitignore'))) problems.push('.gitignore does not contain `.agents/`');
@@ -93,7 +93,7 @@ let dict = null;
 // 4. no leading-slash URLs
 {
   const problems = [];
-  for (const f of ['index.html', 'privacy.html', 'terms.html', 'styles.css', 'app.js', 'ui.js']) {
+  for (const f of ['index.html', 'privacy.html', 'terms.html', 'styles.css', 'app.js', 'ui.js', 'content-i18n.js']) {
     const src = read(f);
     src.split('\n').forEach((line, i) => {
       if (/(href|src)=["']\/[^/]/.test(line)) problems.push(`${f}:${i + 1} leading-slash href/src`);
@@ -128,7 +128,7 @@ let dict = null;
 // 6. no alert/confirm/prompt in JS (ui.confirm({...}) is allowed)
 {
   const problems = [];
-  for (const f of ['app.js', 'ui.js', 'i18n.js']) {
+  for (const f of ['app.js', 'ui.js', 'i18n.js', 'content-i18n.js']) {
     const src = read(f);
     src.split('\n').forEach((line, i) => {
       if (/\balert\s*\(/.test(line)) problems.push(`${f}:${i + 1} alert(`);
@@ -142,11 +142,11 @@ let dict = null;
 // 7. node --check
 {
   const problems = [];
-  for (const f of ['app.js', 'ui.js', 'i18n.js']) {
+  for (const f of ['app.js', 'ui.js', 'i18n.js', 'content-i18n.js']) {
     try { execFileSync(process.execPath, ['--check', resolve(root, f)], { stdio: 'pipe' }); }
     catch (e) { problems.push(`${f}: ${String(e.stderr || e.message).trim().split('\n')[0]}`); }
   }
-  report('7 node --check app.js ui.js i18n.js', problems);
+  report('7 node --check app.js ui.js i18n.js content-i18n.js', problems);
 }
 
 // 8. privacy/terms headings intact
@@ -161,6 +161,48 @@ let dict = null;
     if (!/<link rel="stylesheet" href="styles\.css">/.test(src)) problems.push(`${f}: does not link styles.css`);
   }
   report('8 privacy/terms h1 text + h2 counts (10/12) + styles.css link', problems);
+}
+
+// 9. content-i18n.js dictionary (admin-content translations) + tc() behaviour
+{
+  const problems = [];
+  const DEVA = /[\u0900-\u097F]/;
+  const slots = (s) => [...String(s).matchAll(/\{(\d)\}/g)].map((m) => m[1]).sort().join(',');
+  try {
+    const { DICT, TEMPLATES, tc } = await import(pathToFileURL(resolve(root, 'content-i18n.js')).href);
+    const entries = Object.entries(DICT ?? {});
+    if (entries.length < 50) problems.push(`DICT has ${entries.length} entries, expected ≥ 50`);
+    for (const [k, v] of entries) {
+      for (const l of ['hi', 'bho']) {
+        const s = v?.[l];
+        if (typeof s !== 'string' || s.trim() === '') problems.push(`DICT["${k}"].${l} is empty`);
+        else if (!DEVA.test(s)) problems.push(`DICT["${k}"].${l} has no Devanagari: "${s}"`);
+      }
+    }
+    if (!Array.isArray(TEMPLATES)) problems.push('TEMPLATES is not an array');
+    (TEMPLATES ?? []).forEach((tpl, i) => {
+      if (!(tpl.re instanceof RegExp)) problems.push(`TEMPLATES[${i}].re is not a RegExp`);
+      for (const l of ['hi', 'bho']) {
+        if (typeof tpl[l] !== 'string' || !DEVA.test(tpl[l])) problems.push(`TEMPLATES[${i}].${l} missing or no Devanagari`);
+      }
+      if (slots(tpl.hi) !== slots(tpl.bho)) problems.push(`TEMPLATES[${i}] {n} sets differ between hi and bho`);
+    });
+    // behavioural
+    for (const l of ['hi', 'bho']) if (!DEVA.test(tc('Gynaecology', l))) problems.push(`tc('Gynaecology','${l}') is not Devanagari`);
+    if (tc('Dr. Sarita Singh', 'hi') !== 'Dr. Sarita Singh') problems.push('tc() altered a doctor name');
+    const t1 = tc('Medical Officer , Govt. of Bihar', 'hi');
+    const t2 = tc('Medical Officer,  Govt. of Bihar', 'hi');
+    if (t1 !== t2 || !DEVA.test(t1)) problems.push(`doctor title variants differ or not Devanagari: "${t1}" / "${t2}"`);
+    const fd = tc('Free delivery above ₹999 · Classical formulations', 'bho');
+    if (!fd.includes('₹999') || !DEVA.test(fd) || /Classical/.test(fd)) problems.push(`template 'Free delivery' failed: "${fd}"`);
+    const up = tc('Up to 30% off Churna & Powders', 'hi');
+    if (!up.includes('30%') || !up.includes('चूर्ण')) problems.push(`template 'Up to % off' failed: "${up}"`);
+    if (tc('anything', 'en') !== 'anything') problems.push("tc('anything','en') changed the input");
+    console.log(`      content entries=${entries.length} templates=${(TEMPLATES ?? []).length}`);
+  } catch (e) {
+    problems.push(`import failed: ${e.message}`);
+  }
+  report('9 content-i18n.js: ≥50 DICT entries with hi+bho Devanagari, TEMPLATES shape, tc() behaviour', problems);
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`);
