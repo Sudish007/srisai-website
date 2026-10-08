@@ -24,7 +24,7 @@ function report(name, problems) {
 }
 
 // 1. required files
-const REQUIRED = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'ui.js', 'content-i18n.js', 'privacy.html', 'terms.html', '.gitignore'];
+const REQUIRED = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'ui.js', 'content-i18n.js', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'privacy.html', 'terms.html', '.gitignore'];
 {
   const problems = REQUIRED.filter((f) => !existsSync(resolve(root, f))).map((f) => `missing ${f}`);
   if (existsSync(resolve(root, '.gitignore')) && !/^\.agents\/?\s*$/m.test(read('.gitignore'))) problems.push('.gitignore does not contain `.agents/`');
@@ -93,7 +93,7 @@ let dict = null;
 // 4. no leading-slash URLs
 {
   const problems = [];
-  for (const f of ['index.html', 'privacy.html', 'terms.html', 'styles.css', 'app.js', 'ui.js', 'content-i18n.js']) {
+  for (const f of ['index.html', 'privacy.html', 'terms.html', 'styles.css', 'app.js', 'ui.js', 'content-i18n.js', 'sw.js', 'manifest.webmanifest']) {
     const src = read(f);
     src.split('\n').forEach((line, i) => {
       if (/(href|src)=["']\/[^/]/.test(line)) problems.push(`${f}:${i + 1} leading-slash href/src`);
@@ -142,11 +142,11 @@ let dict = null;
 // 7. node --check
 {
   const problems = [];
-  for (const f of ['app.js', 'ui.js', 'i18n.js', 'content-i18n.js']) {
+  for (const f of ['app.js', 'ui.js', 'i18n.js', 'content-i18n.js', 'sw.js']) {
     try { execFileSync(process.execPath, ['--check', resolve(root, f)], { stdio: 'pipe' }); }
     catch (e) { problems.push(`${f}: ${String(e.stderr || e.message).trim().split('\n')[0]}`); }
   }
-  report('7 node --check app.js ui.js i18n.js content-i18n.js', problems);
+  report('7 node --check app.js ui.js i18n.js content-i18n.js sw.js', problems);
 }
 
 // 8. privacy/terms headings intact
@@ -203,6 +203,79 @@ let dict = null;
     problems.push(`import failed: ${e.message}`);
   }
   report('9 content-i18n.js: ≥50 DICT entries with hi+bho Devanagari, TEMPLATES shape, tc() behaviour', problems);
+}
+
+// 10. critical CSS is copied verbatim from styles.css (≤ 8192 bytes) + perf <head> shape
+{
+  const problems = [];
+  const html = read('index.html');
+  const css = read('styles.css');
+  const m = html.match(/<style id="critical">([\s\S]*?)<\/style>/);
+  if (!m) problems.push('index.html has no <style id="critical">…</style>');
+  else {
+    const block = m[1];
+    const bytes = Buffer.byteLength(block, 'utf8');
+    if (bytes > 8192) problems.push(`critical block is ${bytes} bytes (max 8192)`);
+    // split into top-level statements by brace depth
+    const stmts = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < block.length; i++) {
+      const ch = block[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) { stmts.push(block.slice(start, i + 1)); start = i + 1; } }
+    }
+    if (depth !== 0) problems.push('unbalanced braces in critical block');
+    if (block.slice(start).trim()) problems.push(`trailing text outside a rule: "${block.slice(start).trim().slice(0, 40)}"`);
+    const short = (s) => s.trim().replace(/\s+/g, ' ').slice(0, 70);
+    for (const raw of stmts) {
+      const s = raw.trim();
+      if (s.startsWith('@media')) {
+        const prelude = s.slice(0, s.indexOf('{')).trim();
+        if (!css.includes(prelude)) problems.push(`media prelude not in styles.css: "${prelude}"`);
+        const inner = s.slice(s.indexOf('{') + 1, s.lastIndexOf('}'));
+        for (const line of inner.split('\n')) {
+          const r = line.trim();
+          if (r && !css.includes(r)) problems.push(`media inner rule not verbatim in styles.css: "${short(r)}"`);
+        }
+      } else if (s.startsWith('@keyframes')) {
+        if (!css.includes(s)) problems.push(`keyframes not verbatim in styles.css: "${short(s)}"`);
+      } else if (!css.includes(s)) problems.push(`rule not verbatim in styles.css: "${short(s)}"`);
+    }
+    console.log(`      critical: ${stmts.length} statements, ${bytes} bytes`);
+  }
+  if (!/rel="stylesheet" href="styles\.css" media="print"/.test(html)) problems.push('styles.css is not loaded with media="print" + onload swap');
+  if (!/<noscript>[^]*?styles\.css[^]*?<\/noscript>/.test(html)) problems.push('missing <noscript> fallback for styles.css');
+  if (!/rel="manifest" href="manifest\.webmanifest"/.test(html)) problems.push('missing <link rel="manifest" href="manifest.webmanifest">');
+  if (!/rel="modulepreload" href="app\.js"/.test(html)) problems.push('missing <link rel="modulepreload" href="app.js">');
+  const outsideNoscript = html.replace(/<noscript>[\s\S]*?<\/noscript>/g, '');
+  if (/<link rel="stylesheet" href="styles\.css">/.test(outsideNoscript)) problems.push('render-blocking <link rel="stylesheet" href="styles.css"> found outside <noscript>');
+  if (/Noto\+Sans\+Devanagari/.test(html)) problems.push('index.html requests Noto Sans Devanagari (i18n.js injects it only for hi/bho)');
+  report('10 critical CSS verbatim from styles.css (≤8192 B) + async styles/fonts head', problems);
+}
+
+// 11. service worker + manifest
+{
+  const problems = [];
+  const sw = read('sw.js');
+  const app = read('app.js');
+  if (!/\bconst VERSION\s*=/.test(sw)) problems.push('sw.js has no VERSION constant');
+  if (!/serviceWorker\.register\('sw\.js'\)/.test(app)) problems.push("app.js does not call navigator.serviceWorker.register('sw.js')");
+  const shell = sw.match(/const SHELL = \[([\s\S]*?)\];/)?.[1] ?? '';
+  if (!shell) problems.push('sw.js has no SHELL array');
+  for (const m of shell.matchAll(/'([^']+)'/g)) if (!m[1].startsWith('./')) problems.push(`SHELL entry not relative: ${m[1]}`);
+  for (const must of ['./index.html', './content-i18n.js', './styles.css', './app.js']) if (!shell.includes(`'${must}'`)) problems.push(`SHELL lacks ${must}`);
+  if (/rest\\?\/v1\\?\/rpc/.test(sw)) problems.push('sw.js references rest/v1/rpc (RPC must never be cached)');
+  if (/auth\\?\/v1/.test(sw)) problems.push('sw.js references auth/v1 (auth must never be cached)');
+  if (/functions\\?\/v1/.test(sw)) problems.push('sw.js references functions/v1 (edge functions must never be cached)');
+  if (!/req\.method !== 'GET'\) return/.test(sw)) problems.push('sw.js fetch handler does not bail out on non-GET');
+  try {
+    const man = JSON.parse(read('manifest.webmanifest'));
+    if (man.start_url !== './') problems.push(`manifest start_url is ${JSON.stringify(man.start_url)}, expected "./"`);
+    if (man.theme_color !== '#0a2647') problems.push(`manifest theme_color is ${man.theme_color}`);
+    if (!Array.isArray(man.icons) || man.icons.length < 1) problems.push('manifest has no icons');
+    for (const ic of man.icons ?? []) if (/^\//.test(ic.src)) problems.push(`manifest icon src is absolute: ${ic.src}`);
+  } catch (e) { problems.push(`manifest.webmanifest does not parse: ${e.message}`); }
+  report('11 sw.js (VERSION, relative SHELL, no auth/functions/rpc, GET-only) + manifest.webmanifest + register(\'sw.js\')', problems);
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`);

@@ -1333,6 +1333,14 @@ const storage = () => {
   try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch { return null; }
 };
 
+// Noto Sans Devanagari is only fetched when the UI is actually in hi/bho —
+// English visitors never pay for the extra woff2 (index.html does not link it).
+const DEVA_FONT_URL = 'https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;600;700&display=swap';
+function ensureDevaFont(code) {
+  if (!hasDoc() || (code !== 'hi' && code !== 'bho') || document.getElementById('fontDeva')) return;
+  const l = document.createElement('link'); l.id = 'fontDeva'; l.rel = 'stylesheet'; l.href = DEVA_FONT_URL; document.head.appendChild(l);
+}
+
 export function getLang() {
   return current;
 }
@@ -1372,6 +1380,7 @@ export function setLang(code) {
   if (s) { try { s.setItem(STORAGE_KEY, code); } catch { /* quota / private mode */ } }
   if (hasDoc()) {
     document.documentElement.lang = code;
+    ensureDevaFont(code);
     applyTranslations();
     document.dispatchEvent(new CustomEvent('langchange', { detail: { lang: code } }));
   }
@@ -1389,6 +1398,7 @@ export function initLang() {
   current = code;
   if (hasDoc()) {
     document.documentElement.lang = code;
+    ensureDevaFont(code);
     applyTranslations();
   }
   return current;

@@ -7,7 +7,6 @@
 // Layout: index.html holds five hash-routed screens (#home #pharmacy #book
 // #token #orders) + overlay sheets; every renderer re-runs on 'langchange'.
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { t, getLang, setLang, initLang, onLangChange } from './i18n.js';
 import { tc } from './content-i18n.js';
 import * as ui from './ui.js';
@@ -16,7 +15,14 @@ const { $, esc, inr } = ui;
 
 const SUPABASE_URL = 'https://blpptbmezfzkdctzxafs.supabase.co';
 const ANON_KEY = 'sb_publishable_P40MX5RdTrjKVFPtDzod4A_cXrgiIKf';
-export const db = createClient(SUPABASE_URL, ANON_KEY);
+// supabase-js (~94 KB gz, 3 round-trips from esm.sh) is loaded lazily with a dynamic
+// import() so the static shell + cached data paint first; every call goes through safe().
+let dbPromise = null;
+export function getDb() {
+  dbPromise ??= import('https://esm.sh/@supabase/supabase-js@2').then(({ createClient }) => createClient(SUPABASE_URL, ANON_KEY));
+  return dbPromise;
+}
+const safe = (fn) => getDb().then(fn).then((r) => r, (e) => ({ data: null, error: e }));
 
 // ---------------- persistence ----------------
 const LS = {
@@ -80,6 +86,23 @@ const waHref = (text) => {
 };
 const safeColor = (c, fallback) => (/^#[0-9a-f]{3,8}$/i.test(String(c ?? '')) ? c : fallback);
 const hospitalName = () => state.settings?.hospital_name ?? 'Sri Sai Hospital';
+
+// ---------------- images ----------------
+// Supabase Storage can serve resized variants via /render/image/ — but only on paid plans
+// (returns 403 otherwise). One HEAD probe per week decides; until it says yes we ship originals.
+const IMG_PROBE_KEY = 'srisai-img-probe';
+const IMG_PROBE_TTL = 7 * 24 * 3600 * 1000;
+let imgTransformOk = (() => { const p = readLS(IMG_PROBE_KEY, null); return (p && Date.now() - p.ts < IMG_PROBE_TTL) ? !!p.ok : null; })();
+const renderUrl = (url, w) => url.replace('/storage/v1/object/public/', '/storage/v1/render/image/public/') + (url.includes('?') ? '&' : '?') + `width=${w}&quality=70`;
+const imgSrc = (url, w) => (imgTransformOk === true && /\/storage\/v1\/object\/public\//.test(url)) ? renderUrl(url, w) : url;
+let imgProbing = false;
+function probeImgTransform(sampleUrl) {
+  if (imgTransformOk !== null || imgProbing || !sampleUrl || !/\/storage\/v1\/object\/public\//.test(sampleUrl)) return;
+  imgProbing = true;
+  fetch(renderUrl(sampleUrl, 64), { method: 'HEAD' })
+    .then((r) => { imgTransformOk = r.ok; }, () => { imgTransformOk = false; })
+    .then(() => { writeLS(IMG_PROBE_KEY, { ok: imgTransformOk, ts: Date.now() }); }); // next render picks it up; never forces one
+}
 
 // UPI deep link — encodeURIComponent per field (a form-encoded '+' breaks UPI apps).
 export function upiUrl(amount, note) {
@@ -236,30 +259,57 @@ export function router() {
 }
 
 // ---------------- data loading ----------------
-const safe = (p) => p.then((r) => r, (e) => ({ data: null, error: e }));
+// Stale-while-revalidate: the six public tables are mirrored into localStorage so a
+// repeat visit paints real content before supabase-js has even been downloaded.
+const CACHE_KEY = 'srisai-cache-v1';
+const CACHE_TTL = 7 * 24 * 3600 * 1000;
+const PUBLIC_TABLES = ['settings', 'categories', 'medicines', 'doctors', 'services', 'banners'];
+let hadCache = false;
 let errorToasted = false;
+
+function hydrateFromCache() {
+  const c = readLS(CACHE_KEY, null);
+  if (!(c && typeof c.ts === 'number' && Date.now() - c.ts < CACHE_TTL && c.settings)) return false;
+  for (const k of PUBLIC_TABLES) state[k] = c[k] ?? (k === 'settings' ? null : []);
+  state.loaded = true;
+  hadCache = true;
+  return true;
+}
 
 export async function loadAll() {
   if (!state.loaded) renderSkeletons();
   const [st, cats, meds, docs, svcs, bans] = await Promise.all([
-    safe(db.from('settings').select('*').eq('id', 1).maybeSingle()),
-    safe(db.from('categories').select('*').eq('is_active', true).order('sort_order')),
-    safe(db.from('medicines').select('*').eq('is_active', true).order('name').limit(500)),
-    safe(db.from('doctors').select('*').eq('is_active', true).order('sort_order')),
-    safe(db.from('services').select('*').eq('is_active', true).order('sort_order')),
-    safe(db.from('banners').select('*').eq('is_active', true).order('sort_order')),
+    safe((db) => db.from('settings').select('*').eq('id', 1).maybeSingle()),
+    safe((db) => db.from('categories').select('*').eq('is_active', true).order('sort_order')),
+    safe((db) => db.from('medicines').select('*').eq('is_active', true).order('name').limit(500)),
+    safe((db) => db.from('doctors').select('*').eq('is_active', true).order('sort_order')),
+    safe((db) => db.from('services').select('*').eq('is_active', true).order('sort_order')),
+    safe((db) => db.from('banners').select('*').eq('is_active', true).order('sort_order')),
   ]);
-  const failed = [st, cats, meds, docs, svcs, bans].some((r) => r.error);
-  if (st.data) state.settings = st.data;
-  if (!cats.error) state.categories = cats.data ?? [];
-  if (!meds.error) state.medicines = meds.data ?? [];
-  if (!docs.error) state.doctors = docs.data ?? [];
-  if (!svcs.error) state.services = svcs.data ?? [];
-  if (!bans.error) state.banners = bans.data ?? [];
+  const results = { settings: st, categories: cats, medicines: meds, doctors: docs, services: svcs, banners: bans };
+  const failed = Object.values(results).some((r) => r.error);
+  let changed = false;
+  let anyOk = false;
+  for (const k of PUBLIC_TABLES) {
+    const r = results[k];
+    if (r.error || (k === 'settings' && !r.data)) continue;
+    anyOk = true;
+    const data = k === 'settings' ? r.data : (r.data ?? []);
+    if (JSON.stringify(state[k]) !== JSON.stringify(data)) { state[k] = data; changed = true; }
+  }
+  if (anyOk) {
+    const snap = { ts: Date.now() };
+    for (const k of PUBLIC_TABLES) snap[k] = state[k];
+    writeLS(CACHE_KEY, snap);
+  }
   state.loadError = failed;
-  if (failed && !errorToasted) { errorToasted = true; ui.toast(t('common.errorGeneric'), 'err'); }
+  if (failed && !errorToasted) {
+    errorToasted = true;
+    if (hadCache) ui.toast(t('common.offline'), 'info'); else ui.toast(t('common.errorGeneric'), 'err');
+  }
+  const first = !state.loaded;
   if (!failed || state.settings) state.loaded = true;
-  renderAll();
+  if (first || changed) renderAll(); // the 60 s refresh no longer rebuilds the DOM when nothing changed
   if (!queueFetched) loadQueue(); // first boot: doctors arrive after router() already tried the widget
 }
 
@@ -383,7 +433,7 @@ function renderBanners() {
         ? `<a class="btn btn-gold sm" href="#book"><span class="lbl">${esc(t('home.bookNow'))}</span></a>`
         : '';
     return `<article class="car-slide" data-idx="${i}" style="background:linear-gradient(135deg,${from},${to})">
-      <div class="car-media">${b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy">` : `<span aria-hidden="true">${esc(b.emoji || '🌿')}</span>`}</div>
+      <div class="car-media">${b.image_url ? `<img src="${esc(imgSrc(b.image_url, 192))}" alt="" width="96" height="96" loading="lazy" decoding="async">` : `<span aria-hidden="true">${esc(b.emoji || '🌿')}</span>`}</div>
       <div class="car-text"><h3>${esc(tc(b.title))}</h3><p>${esc(tc(b.subtitle ?? ''))}</p>${cta}</div>
     </article>`;
   }).join('');
@@ -448,13 +498,14 @@ function renderDoctors() {
     grid.innerHTML = `<div class="empty span-6"><span class="empty-ico" aria-hidden="true">🧑‍⚕️</span><h3>${esc(t('home.noDoctors'))}</h3></div>`;
     return;
   }
+  probeImgTransform(list.find((d) => d.image_url)?.image_url);
   grid.innerHTML = list.map((d) => {
     const id = encodeURIComponent(d.id);
     const tags = (Array.isArray(d.expertise) ? d.expertise : []).slice(0, 4);
     const open = bioOpen.has(String(d.id));
     return `<article class="card lift dcard" data-doc="${esc(d.id)}">
       <div class="dhead">
-        <div class="avatar">${d.image_url ? `<img src="${esc(d.image_url)}" alt="${esc(t('a11y.doctorPhoto'))}" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</div>
+        <div class="avatar">${d.image_url ? `<img src="${esc(imgSrc(d.image_url, 128))}" alt="${esc(t('a11y.doctorPhoto'))}" width="64" height="64" loading="lazy" decoding="async">` : esc(d.emoji || '🧑‍⚕️')}</div>
         <div style="min-width:0">
           <h3>${esc(d.name)}</h3>
           <div class="dspec">${esc(tc(d.specialty ?? ''))}</div>
@@ -528,10 +579,8 @@ async function loadQueue() {
   queueFetched = true;
   const next = {};
   await Promise.all(state.doctors.map(async (d) => {
-    try {
-      const { data } = await db.rpc('queue_status', { p_doctor_id: d.id });
-      if (data && data.last_issued != null) next[d.id] = data;
-    } catch { /* keep hidden */ }
+    const { data } = await safe((db) => db.rpc('queue_status', { p_doctor_id: d.id }));
+    if (data && data.last_issued != null) next[d.id] = data;
   }));
   queueData = next;
   renderQueue();
@@ -590,7 +639,7 @@ const qtyOf = (id) => Number(state.cart[id] || 0);
 // Media box shared by cards, cart lines and the product sheet (image lazy-loaded, else emoji).
 const mediaHtml = (m, cls = 'pmedia') =>
   `<span class="${cls}" aria-hidden="true">${m.image_url
-    ? `<img src="${esc(m.image_url)}" alt="" loading="lazy" decoding="async">`
+    ? `<img src="${esc(imgSrc(m.image_url, 400))}" alt="" width="400" height="400" loading="lazy" decoding="async">`
     : `<span class="pemoji">${esc(m.emoji || '💊')}</span>`}</span>`;
 
 const priceHtml = (m) =>
@@ -776,7 +825,7 @@ export function openProduct(id) {
 }
 
 async function loadReviews(id) {
-  const { data, error } = await safe(db.from('reviews').select('*').eq('medicine_id', id).eq('is_visible', true).order('created_at', { ascending: false }).limit(20));
+  const { data, error } = await safe((db) => db.from('reviews').select('*').eq('medicine_id', id).eq('is_visible', true).order('created_at', { ascending: false }).limit(20));
   if (state.reviews.id !== String(id)) return; // user moved on
   state.reviews = { id: String(id), rows: error ? [] : (data ?? []), error: !!error };
   if (ui.currentSheet() === 'sheetProduct') renderReviews();
@@ -876,7 +925,7 @@ async function submitReview() {
   if (!rating) { err.textContent = t('product.ratingRequired'); return; }
   err.textContent = '';
   btn.setAttribute('aria-busy', 'true');
-  const { error } = await safe(db.from('reviews').upsert({
+  const { error } = await safe((db) => db.from('reviews').upsert({
     medicine_id: m.id,
     user_id: s.user.id,
     user_name: (s.user.user_metadata?.full_name || s.user.email || 'Customer').slice(0, 60),
@@ -1038,7 +1087,7 @@ async function applyCoupon() {
   const btn = $('cartBody').querySelector('[data-coupon-apply]');
   if (!code || !btn) return;
   btn.setAttribute('aria-busy', 'true');
-  const { data, error } = await safe(db.rpc('check_coupon', { p_code: code, p_subtotal: cartDetail().subtotal }));
+  const { data, error } = await safe((db) => db.rpc('check_coupon', { p_code: code, p_subtotal: cartDetail().subtotal }));
   btn.removeAttribute('aria-busy');
   if (error) {
     state.coupon = null;
@@ -1088,7 +1137,7 @@ export async function placeOrder() {
   const address = f.address.trim();
   const city = f.city.trim();
   const pincode = f.pincode.trim();
-  const { data, error } = await safe(db.rpc('place_order', {
+  const { data, error } = await safe((db) => db.rpc('place_order', {
     p_order_number: orderNumber,
     p_items: d.lines.map((l) => ({ medicine_id: l.m.id, qty: l.qty })),
     p_customer_name: name,
@@ -1165,7 +1214,7 @@ export async function openRazorpay(order, btn) {
   if (win) win.opener = null;
   btn?.setAttribute('aria-busy', 'true');
   ui.toast(t('pay.opening'), 'info', 2000);
-  const { data, error } = await safe(db.functions.invoke('create-payment-link', {
+  const { data, error } = await safe((db) => db.functions.invoke('create-payment-link', {
     body: { orderNumber: order.orderNumber, customerName: order.name, phone: order.phone },
   }));
   btn?.removeAttribute('aria-busy');
@@ -1251,7 +1300,7 @@ function doctorRadiosHtml(group, selectedId, errKey) {
     const on = String(d.id) === String(selectedId ?? '');
     return `<label class="card dradio ${on ? 'on' : ''}">
       <input type="radio" name="${group}" value="${esc(d.id)}" ${on ? 'checked' : ''}>
-      <span class="avatar sm" aria-hidden="true">${d.image_url ? `<img src="${esc(d.image_url)}" alt="" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</span>
+      <span class="avatar sm" aria-hidden="true">${d.image_url ? `<img src="${esc(imgSrc(d.image_url, 96))}" alt="" width="48" height="48" loading="lazy" decoding="async">` : esc(d.emoji || '🧑‍⚕️')}</span>
       <span class="dtxt"><b>${esc(d.name)}</b><small>${esc(tc(d.specialty ?? ''))}</small></span>
       <span class="pcheck" aria-hidden="true"></span>
     </label>`;
@@ -1278,7 +1327,7 @@ async function loadMyAppts(force = false) {
   myAppts.loading = true;
   myAppts.error = false;
   renderMyAppts();
-  const { data, error } = await safe(db.from('appointments').select('*').eq('user_id', uid).order('appointment_date', { ascending: false }).limit(50));
+  const { data, error } = await safe((db) => db.from('appointments').select('*').eq('user_id', uid).order('appointment_date', { ascending: false }).limit(50));
   myAppts.loading = false;
   if (myAppts.uid !== uid) return; // signed out / switched meanwhile
   if (error) { myAppts.error = true; myAppts.rows = myAppts.rows ?? []; }
@@ -1485,7 +1534,7 @@ async function submitBooking() {
   }
   bk.busy = true;
   renderBookForm();
-  const { error } = await safe(db.from('appointments').insert({
+  const { error } = await safe((db) => db.from('appointments').insert({
     user_id: state.session.user.id,
     doctor_id: a.doctorId,
     doctor_name: a.doctorName,
@@ -1556,7 +1605,7 @@ async function cancelAppointment(row, btn) {
   const ok = await ui.confirm({ title: t('book.cancel'), body: t('book.cancelConfirm'), ok: t('book.cancel'), cancel: t('common.keep'), danger: true });
   if (!ok) return;
   btn?.setAttribute('aria-busy', 'true');
-  const { error } = await safe(db.rpc('cancel_my_appointment', { p_id: row.id, p_phone: row.phone }));
+  const { error } = await safe((db) => db.rpc('cancel_my_appointment', { p_id: row.id, p_phone: row.phone }));
   btn?.removeAttribute('aria-busy');
   if (error) { ui.toast(error.message || t('book.cancelFailed'), 'err', 5000); return; }
   row.status = 'cancelled';
@@ -1656,7 +1705,7 @@ async function takeToken() {
   const patientName = tkName().trim();
   tk.busy = true;
   renderTokenForm();
-  const { data, error } = await safe(db.rpc('take_token', { p_doctor_id: doc.id, p_patient_name: patientName, p_phone: phone }));
+  const { data, error } = await safe((db) => db.rpc('take_token', { p_doctor_id: doc.id, p_patient_name: patientName, p_phone: phone }));
   tk.busy = false;
   if (error || !data) {
     // Server messages (phone limit, doctor unavailable, already has a token) shown verbatim.
@@ -1722,7 +1771,7 @@ async function pollToken() {
   const tok = activeToken();
   if (!tok) { stopTokenPoll(); return; }
   if (document.hidden) return;
-  const { data, error } = await safe(db.rpc('queue_status', { p_doctor_id: tok.doctorId, p_token_no: tok.tokenNo }));
+  const { data, error } = await safe((db) => db.rpc('queue_status', { p_doctor_id: tok.doctorId, p_token_no: tok.tokenNo }));
   if (error || !data) return;
   tk.live = data;
   const st = data.my_status;
@@ -1746,8 +1795,8 @@ async function cancelToken(tok, btn) {
   const ok = await ui.confirm({ title: t('token.cancel'), body: t('token.cancelConfirm', { n: tok.tokenNo }), ok: t('token.cancel'), cancel: t('common.keep'), danger: true });
   if (!ok) return;
   btn?.setAttribute('aria-busy', 'true');
-  const { error } = await safe(db.rpc('cancel_token', { p_token_id: tok.id }));
-  const re = await safe(db.rpc('queue_status', { p_doctor_id: tok.doctorId, p_token_no: tok.tokenNo }));
+  const { error } = await safe((db) => db.rpc('cancel_token', { p_token_id: tok.id }));
+  const re = await safe((db) => db.rpc('queue_status', { p_doctor_id: tok.doctorId, p_token_no: tok.tokenNo }));
   btn?.removeAttribute('aria-busy');
   const st = re.data?.my_status;
   if (!st || st === 'waiting') {
@@ -1903,7 +1952,7 @@ export async function syncOrders() {
   syncing = true;
   syncState = 'syncing';
   paintSync();
-  const { data, error } = await safe(db.rpc('my_orders_status', {
+  const { data, error } = await safe((db) => db.rpc('my_orders_status', {
     p_keys: active.slice(0, 50).map((o) => ({ order_number: o.orderNumber, phone: o.phone })),
   }));
   syncing = false;
@@ -2057,7 +2106,7 @@ function payOrder(o, btn) {
 async function claimPaid(o, btn) {
   const ref = (claimDraft[o.orderNumber] ?? '').trim().slice(0, 60);
   btn?.setAttribute('aria-busy', 'true');
-  const { error } = await safe(db.rpc('claim_order_paid', { p_order_number: o.orderNumber, p_phone: o.phone, p_ref: ref || null }));
+  const { error } = await safe((db) => db.rpc('claim_order_paid', { p_order_number: o.orderNumber, p_phone: o.phone, p_ref: ref || null }));
   btn?.removeAttribute('aria-busy');
   if (error) { ui.toast(error.message || t('orders.claimFailed'), 'err'); return; }
   o.claimed = true;
@@ -2073,7 +2122,7 @@ async function switchToCod(o, btn) {
   const ok = await ui.confirm({ title: t('orders.switchCod'), body: t('orders.switchCodConfirm', { amount: inr(o.total) }), ok: t('common.yes'), cancel: t('common.no') });
   if (!ok) return;
   btn?.setAttribute('aria-busy', 'true');
-  const { error } = await safe(db.rpc('set_my_payment_method', { p_order_number: o.orderNumber, p_phone: o.phone, p_method: 'cod' }));
+  const { error } = await safe((db) => db.rpc('set_my_payment_method', { p_order_number: o.orderNumber, p_phone: o.phone, p_method: 'cod' }));
   btn?.removeAttribute('aria-busy');
   if (error) { ui.toast(error.message || t('orders.switchFailed'), 'err'); return; }
   o.payMethod = 'cod';
@@ -2092,7 +2141,7 @@ async function cancelOrder(o, btn) {
   const ok = await ui.confirm({ title: t('orders.cancel'), body: t('orders.cancelConfirm', { order: o.orderNumber }), ok: t('orders.cancel'), cancel: t('common.keep'), danger: true });
   if (!ok) return;
   btn?.setAttribute('aria-busy', 'true');
-  const { error } = await safe(db.rpc('cancel_my_order', { p_order_number: o.orderNumber, p_phone: o.phone }));
+  const { error } = await safe((db) => db.rpc('cancel_my_order', { p_order_number: o.orderNumber, p_phone: o.phone }));
   btn?.removeAttribute('aria-busy');
   if (error) { ui.toast(error.message || t('orders.cancelFailed'), 'err', 5000); return; }
   o.status = 'cancelled';
@@ -2238,7 +2287,7 @@ function clearAuthErr(k, input) {
 function setAuthBusy(v) { auth.busy = v; if (ui.currentSheet() === 'sheetAccount') renderAccount(); }
 
 async function signInGoogle() {
-  const { error } = await safe(db.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } }));
+  const { error } = await safe((db) => db.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } }));
   if (error) ui.toast(t('auth.googleFailed'), 'err');
 }
 async function sendCode() {
@@ -2247,7 +2296,7 @@ async function sendCode() {
   if (!EMAIL_RE.test(email)) { auth.errors.email = 'auth.errEmail'; renderAccount(); $('authEmail')?.focus(); return; }
   auth.email = email;
   setAuthBusy(true);
-  const { error } = await safe(db.auth.signInWithOtp({ email, options: { shouldCreateUser: true } }));
+  const { error } = await safe((db) => db.auth.signInWithOtp({ email, options: { shouldCreateUser: true } }));
   auth.busy = false;
   if (error) { ui.toast(error.message || t('auth.failed'), 'err', 5000); renderAccount(); return; }
   auth.step = 'code';
@@ -2262,7 +2311,7 @@ async function verifyCode() {
   const token = auth.code.trim();
   if (!/^\d{6}$/.test(token)) { auth.errors.code = 'auth.errCode'; renderAccount(); $('authCode')?.focus(); return; }
   setAuthBusy(true);
-  const { error } = await safe(db.auth.verifyOtp({ email: auth.email, token, type: 'email' }));
+  const { error } = await safe((db) => db.auth.verifyOtp({ email: auth.email, token, type: 'email' }));
   auth.busy = false;
   if (error) { ui.toast(error.message || t('auth.failed'), 'err', 5000); renderAccount(); $('authCode')?.focus(); return; }
   ui.toast(t('auth.welcome'), 'ok');
@@ -2277,7 +2326,7 @@ async function signInPassword() {
   if (Object.keys(auth.errors).length) { renderAccount(); $(auth.errors.email ? 'authEmail' : 'authPassword')?.focus(); return; }
   auth.email = email;
   setAuthBusy(true);
-  const { error } = await safe(db.auth.signInWithPassword({ email, password: auth.password }));
+  const { error } = await safe((db) => db.auth.signInWithPassword({ email, password: auth.password }));
   auth.busy = false;
   if (error) { ui.toast(error.message || t('auth.failed'), 'err', 5000); renderAccount(); return; }
   ui.toast(t('auth.welcome'), 'ok');
@@ -2311,7 +2360,7 @@ function renderSignedIn(body, s) {
   $('newPassword').addEventListener('input', (e) => { auth.newPassword = e.target.value; clearAuthErr('newPassword', e.target); });
   $('pwForm').addEventListener('submit', (e) => { e.preventDefault(); savePassword(); });
   body.querySelector('[data-signout]').addEventListener('click', async () => {
-    await safe(db.auth.signOut());
+    await safe((db) => db.auth.signOut());
     resetAuth();
     ui.toast(t('account.signedOut'), 'ok');
     ui.closeSheet();
@@ -2321,7 +2370,7 @@ async function savePassword() {
   if (auth.busy) return;
   if (auth.newPassword.length < 6) { auth.errors.newPassword = 'auth.errPassword'; renderAccount(); $('newPassword')?.focus(); return; }
   setAuthBusy(true);
-  const { error } = await safe(db.auth.updateUser({ password: auth.newPassword }));
+  const { error } = await safe((db) => db.auth.updateUser({ password: auth.newPassword }));
   auth.busy = false;
   if (error) { ui.toast(error.message || t('account.passwordFailed'), 'err', 5000); renderAccount(); return; }
   auth.newPassword = '';
@@ -2336,13 +2385,15 @@ function paintAuth() {
   if (ui.currentSheet() === 'sheetProduct') renderReviews();   // write-review block depends on session
   if (ui.currentSheet() === 'sheetCart') renderCart();         // sign-in nudge
 }
-db.auth.onAuthStateChange((e, s) => {
-  state.session = s;
-  if (e === 'SIGNED_IN' || e === 'SIGNED_OUT') resetAuth();
-  paintAuth();
-  renderBook();
+getDb().then((db) => {
+  db.auth.onAuthStateChange((e, s) => {
+    state.session = s;
+    if (e === 'SIGNED_IN' || e === 'SIGNED_OUT') resetAuth();
+    paintAuth();
+    renderBook();
+  });
+  db.auth.getSession().then(({ data }) => { state.session = data.session; paintAuth(); });
 });
-db.auth.getSession().then(({ data }) => { state.session = data.session; paintAuth(); });
 
 // ---------------- wiring ----------------
 function initChrome() {
@@ -2382,6 +2433,7 @@ initTheme();
 initChrome();
 initCarousel();
 initLangSegs();
+hydrateFromCache(); // repeat visit: paint saved content before supabase-js is even fetched
 router();
 loadAll();
 if (activeToken()) startTokenPoll(); // keep today's token status fresh even off the token screen
@@ -2401,3 +2453,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 window.addEventListener('focus', syncOrdersDebounced);
+
+// Service worker: relative 'sw.js' so the GitHub Pages subpath scope is correct.
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))) {
+  const reg = () => navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (document.readyState === 'complete') reg(); else window.addEventListener('load', reg, { once: true });
+}

@@ -11,10 +11,141 @@
 <meta property="og:description" content="Order medicines, book doctors, live OPD queue">
 <meta property="og:site_name" content="Sri Sai Hospital">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2300b894'/%3E%3Cstop offset='1' stop-color='%2300cec9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='14' fill='url(%23g)'/%3E%3Cpath d='M13 33c0-10 7-17 18-18-1 11-8 18-18 18z' fill='%23fff'/%3E%3Cpath d='M14 32c3-6 8-11 14-14' stroke='%2300997b' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3Cpath d='M33 12v9M28.5 16.5h9' stroke='%23fff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://blpptbmezfzkdctzxafs.supabase.co">
+<link rel="preconnect" href="https://esm.sh" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="modulepreload" href="app.js">
+<link rel="modulepreload" href="i18n.js">
+<link rel="modulepreload" href="ui.js">
+<link rel="modulepreload" href="content-i18n.js">
+<style id="critical">
+:root {
+  --navy-900:#0a1628; --navy-800:#0a2647; --navy-700:#0f4c75; --navy-500:#3282b8;
+  --teal-500:#00b894; --teal-400:#00cec9; --teal-600:#00997b; --teal-50:#e6f9f4;
+  --gold-400:#fdcb6e; --gold-600:#e17f2e; --gold-50:#fff3d9;
+  --danger:#dc2626; --danger-50:#fee2e2; --info:#0369a1; --info-50:#e0f2fe;
+  --wa:#25d366; --wa-dark:#128c7e;
+  --bg:#f0f5ff; --surface:#ffffff; --surface-2:#f7fafd; --text:#1a2332; --muted:#5a6a7e;
+  --faint:#8e9bae; --border:#e3eaf3; --on-brand:#ffffff; --on-gold:#3d2200;
+  --glass:rgba(255,255,255,.78); --glass-border:rgba(227,234,243,.9);
+  --grad-hero:linear-gradient(135deg,#0a1628 0%,#0f4c75 55%,#205295 100%);
+  --grad-teal:linear-gradient(135deg,#00b894,#00cec9);
+  --grad-gold:linear-gradient(135deg,#fdcb6e,#e17f2e);
+  --grad-turn:linear-gradient(135deg,#92400e,#d97706);
+  --sk-a:#edf2fa; --sk-b:#f7faff;
+
+  /* A2 type */
+  --font-ui:"DM Sans","Noto Sans Devanagari",system-ui,-apple-system,"Segoe UI","Nirmala UI",sans-serif;
+  --font-display:"Playfair Display",Georgia,serif;
+  --font-display-deva:"Noto Sans Devanagari","Nirmala UI","Mangal","DM Sans",system-ui,sans-serif;
+  --fs-xs:clamp(.72rem,.68rem + .2vw,.78rem);  --fs-sm:clamp(.82rem,.78rem + .25vw,.9rem);
+  --fs-md:clamp(.95rem,.9rem + .3vw,1.05rem);  --fs-lg:clamp(1.1rem,1rem + .6vw,1.3rem);
+  --fs-xl:clamp(1.5rem,1.2rem + 1.6vw,2.1rem); --fs-2xl:clamp(1.9rem,1.4rem + 2.8vw,3rem);
+  --fs-hero:clamp(2.1rem,1.5rem + 4.2vw,3.8rem); --fs-token:clamp(4rem,2.5rem + 9vw,6.5rem);
+  --lh-tight:1.15; --lh-body:1.55;
+
+  /* A3 spacing, radii, shadows, motion, z */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-8:32px; --sp-10:40px; --sp-12:48px; --sp-16:64px;
+  --r-sm:10px; --r-md:16px; --r-lg:24px; --r-xl:32px; --r-pill:999px;
+  --sh-1:0 1px 2px rgba(10,22,40,.06),0 4px 16px rgba(15,76,117,.08);
+  --sh-2:0 2px 6px rgba(10,22,40,.08),0 10px 36px rgba(15,76,117,.14);
+  --sh-3:0 8px 24px rgba(10,22,40,.14),0 24px 64px rgba(15,76,117,.2);
+  --sh-teal:0 8px 22px rgba(0,184,148,.32); --sh-gold:0 10px 28px rgba(225,127,46,.38);
+  --ease:cubic-bezier(.4,0,.2,1); --ease-spring:cubic-bezier(.34,1.56,.64,1);
+  --t-fast:.16s; --t-med:.3s; --t-slow:.6s;
+  --tap:44px;
+  --safe-b:env(safe-area-inset-bottom,0px);
+  --header-h:64px; --bottombar-h:calc(62px + var(--safe-b));
+  --z-header:40; --z-bottombar:45; --z-fab:46; --z-overlay:60; --z-sheet:70; --z-toast:90;
+  color-scheme: light;
+}
+[data-theme="dark"] {
+  --bg:#0a1628; --surface:#10213a; --surface-2:#142846; --text:#eef3fb;
+  --muted:#a9b7c9; --faint:#7d8da3; --border:#223a5c; --glass:rgba(10,22,40,.72);
+  --glass-border:rgba(34,58,92,.9); --teal-50:#0f3b35; --gold-50:#3a2a0e; --info-50:#0f2a3d; --danger-50:#3b1515;
+  --sk-a:#142846; --sk-b:#1b3356;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font-ui); font-size: var(--fs-md); line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased; min-height: 100dvh;
+  overflow-x: hidden;
+}
+button { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: 0; }
+h1, h2, h3, h4 { margin: 0; line-height: var(--lh-tight); }
+h1, h2, h3.display { font-family: var(--font-display); letter-spacing: -.01em; }
+p { margin: 0; }
+[hidden] { display: none !important; }
+.wrap { max-width: min(1640px, 92vw); margin: 0 auto; padding: 0 clamp(16px, 4vw, 28px); }
+.screen { display: none; padding-bottom: var(--sp-10); }
+.screen.on { display: block; }
+.sec { padding: var(--sp-10) 0 0; }
+.hdr {
+  position: sticky; top: 0; z-index: var(--z-header); height: var(--header-h);
+  background: var(--glass); border-bottom: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+  transition: box-shadow var(--t-med) var(--ease);
+}
+.hdr-in { display: flex; align-items: center; gap: var(--sp-3); height: 100%; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: var(--fs-lg); font-family: var(--font-display); min-width: 0; }
+.brand-mark { width: 38px; height: 38px; flex: none; filter: drop-shadow(0 4px 10px rgba(0,184,148,.35)); }
+#brandName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hdr-nav { display: none; margin-left: var(--sp-4); gap: 4px; }
+.hdr-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+#menuBtn { display: inline-flex; }
+.bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--sp-4); }
+.span-2 { grid-column: span 2; } .span-3 { grid-column: span 3; } .span-4 { grid-column: span 4; } .span-6 { grid-column: span 6; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--sh-1); transition: transform var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease); }
+.tile { padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-2); color: var(--text); min-height: 112px; }
+.tile.accent { background: var(--grad-teal); color: #fff; border-color: transparent; }
+.tile.gold { background: var(--grad-gold); color: var(--on-gold); border-color: transparent; }
+.tile.navy { background: var(--grad-hero); color: #fff; border-color: transparent; }
+.tile.wa { background: linear-gradient(135deg, var(--wa), var(--wa-dark)); color: #fff; border-color: transparent; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--tap); min-inline-size: 8ch; padding: 10px 20px; border-radius: var(--r-pill); font-weight: 700; font-size: var(--fs-sm); border: 1px solid transparent; transition: transform var(--t-fast) var(--ease), box-shadow var(--t-med), background var(--t-fast), opacity var(--t-fast); position: relative; }
+.hero { position: relative; overflow: hidden; background: var(--grad-hero); color: #fff; padding: var(--sp-12) 0 calc(var(--sp-16) + 20px); isolation: isolate; }
+.hero-in { position: relative; max-width: 760px; }
+.hero h1 { font-size: var(--fs-hero); margin: var(--sp-3) 0; font-weight: 800; min-height: 2.3em; }
+.hero-ctas { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-4); }
+.hero-art { display: none; }
+.hero-wave { position: absolute; left: 0; right: 0; bottom: -1px; width: 100%; height: 56px; }
+.hero-wave path { fill: var(--bg); }
+.quick { margin-top: -44px; position: relative; z-index: 2; }
+.sk { border-radius: var(--r-md); background: linear-gradient(90deg, var(--sk-a) 0%, var(--sk-b) 50%, var(--sk-a) 100%); background-size: 200% 100%; animation: shimmer 1.3s infinite; }
+.sk-card { height: 260px; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity var(--t-slow) var(--ease), transform var(--t-slow) var(--ease); }
+.reveal.in { opacity: 1; transform: none; }
+.bottombar { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-bottombar); height: var(--bottombar-h); padding-bottom: var(--safe-b); background: var(--glass); border-top: 1px solid var(--glass-border); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); display: grid; grid-template-columns: repeat(5, 1fr); }
+body { padding-bottom: var(--bottombar-h); }
+@media (max-width: 719.98px) {
+  .bento { grid-template-columns: repeat(2, 1fr); }
+  .span-2, .span-3 { grid-column: span 1; }
+  .span-4, .span-6 { grid-column: span 2; }
+  .quick .tile.wide { grid-column: span 2; }
+  #themeBtn { display: none; }
+  #accountBtn { display: none; }
+  .hero { padding-top: var(--sp-8); }
+}
+@media (min-width: 720px) {
+  body { padding-bottom: 0; }
+  .bottombar { display: none; }
+  #menuBtn { display: none; }
+}
+@media (min-width: 1024px) {
+  .hdr-nav { display: flex; }
+  .hero-in { max-width: min(1640px, 92vw); display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 28vw, 460px); gap: var(--sp-12); align-items: center; }
+}
+</style>
+<script>try{var t=localStorage.getItem('srisai-theme');document.documentElement.dataset.theme=(t==='light'||t==='dark')?t:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');var l=localStorage.getItem('srisai-lang');if(l==='hi'||l==='bho')document.documentElement.lang=l;}catch(e){}</script>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@400;600;700&display=swap" media="print" onload="this.media='all'">
+<link rel="preload" as="style" href="styles.css">
+<link rel="stylesheet" href="styles.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@400;600;700&display=swap"></noscript>
 </head>
 <body>
 
@@ -63,7 +194,7 @@
 <main id="main" tabindex="-1">
 
   <!-- ================= HOME ================= -->
-  <section class="screen" data-screen="home">
+  <section class="screen on" data-screen="home">
     <section class="hero">
       <div class="blob blob-a"></div>
       <div class="blob blob-b"></div>
@@ -107,10 +238,10 @@
       </section>
 
       <!-- Banner carousel -->
-      <section class="sec reveal" id="offers" hidden>
+      <section class="sec reveal" id="offers">
         <div class="sec-head"><div><p class="eyebrow" data-i18n="home.offers">Offers</p></div></div>
         <div class="carousel" id="carousel" data-i18n-aria="a11y.carousel" role="region">
-          <div class="car-track" id="carTrack"></div>
+          <div class="car-track" id="carTrack"><div class="car-slide" style="background:none;box-shadow:none;padding:0"><div class="sk sk-banner" aria-hidden="true"></div></div></div>
           <div class="car-dots" id="carDots"></div>
         </div>
       </section>
@@ -118,7 +249,7 @@
       <!-- Stats -->
       <section class="sec reveal" id="statsSec">
         <div class="sec-head"><div><p class="eyebrow" data-i18n="home.glance">At a glance</p></div></div>
-        <div class="bento stats" id="stats"></div>
+        <div class="bento stats" id="stats"><div class="span-6"><div class="sk sk-line" aria-hidden="true"></div><div class="sk sk-line" aria-hidden="true"></div><div class="sk sk-line" aria-hidden="true"></div><div class="sk sk-line" aria-hidden="true"></div></div></div>
       </section>
 
       <!-- Live OPD queue widget -->
@@ -140,13 +271,13 @@
             <p data-i18n="home.doctorsSub">Doctors who listen first</p>
           </div>
         </div>
-        <div class="dgrid" id="docGrid"></div>
+        <div class="dgrid" id="docGrid"><div class="sk sk-card" aria-hidden="true"></div><div class="sk sk-card" aria-hidden="true"></div><div class="sk sk-card" aria-hidden="true"></div></div>
       </section>
 
       <!-- Services -->
       <section class="sec reveal" id="services">
         <div class="sec-head"><div><h2 data-i18n="home.services">Our services</h2></div></div>
-        <div class="sgrid" id="svcGrid"></div>
+        <div class="sgrid" id="svcGrid"><div class="sk sk-card" aria-hidden="true"></div><div class="sk sk-card" aria-hidden="true"></div></div>
       </section>
 
       <!-- Contact -->
