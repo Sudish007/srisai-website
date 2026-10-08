@@ -68,7 +68,9 @@ async function networkFirst(req, cacheName) {
 async function staleWhileRevalidate(req, cacheName) {
   const cache = await caches.open(cacheName);
   const hit = await cache.match(req);
-  const refresh = fetch(req).then((res) => { if (res.ok) cache.put(req, res.clone()); return res; });
+  const refresh = fetch(req)
+    .then((res) => { if (res.ok) cache.put(req, res.clone()); return res; })
+    .catch((err) => { if (hit) return hit; throw err; }); // offline refresh must not surface as an unhandled rejection
   return hit || refresh;
 }
 
