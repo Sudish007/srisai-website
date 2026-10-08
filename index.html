@@ -104,7 +104,6 @@ p { margin: 0; }
 .tile.accent { background: var(--grad-teal); color: #fff; border-color: transparent; }
 .tile.gold { background: var(--grad-gold); color: var(--on-gold); border-color: transparent; }
 .tile.navy { background: var(--grad-hero); color: #fff; border-color: transparent; }
-.tile.wa { background: linear-gradient(135deg, var(--wa), var(--wa-dark)); color: #fff; border-color: transparent; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--tap); min-inline-size: 8ch; padding: 10px 20px; border-radius: var(--r-pill); font-weight: 700; font-size: var(--fs-sm); border: 1px solid transparent; transition: transform var(--t-fast) var(--ease), box-shadow var(--t-med), background var(--t-fast), opacity var(--t-fast); position: relative; }
 .hero { position: relative; overflow: hidden; background: var(--grad-hero); color: #fff; padding: var(--sp-12) 0 calc(var(--sp-16) + 20px); isolation: isolate; }
 .hero-in { position: relative; max-width: 760px; }
@@ -137,6 +136,7 @@ body { padding-bottom: var(--bottombar-h); }
 }
 @media (min-width: 1024px) {
   .hdr-nav { display: flex; }
+  .hero { padding: var(--sp-16) 0 calc(var(--sp-16) + 36px); }
   .hero-in { max-width: min(1640px, 92vw); display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 28vw, 460px); gap: var(--sp-12); align-items: center; }
 }
 </style>
