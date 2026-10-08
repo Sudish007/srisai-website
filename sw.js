@@ -4,7 +4,10 @@
 // All paths are relative to this file's URL, which keeps the GitHub Pages subpath working.
 //
 // Routing rules (GET + http(s) only — anything else is not handled):
-//   same-origin static            → cache-first (navigate failures fall back to ./index.html)
+//   same-origin static            → stale-while-revalidate (instant from cache, refreshed in the
+//                                   background so a deploy without a VERSION bump still reaches
+//                                   returning visitors on their next visit; navigate failures fall
+//                                   back to ./index.html)
 //   SUPABASE /storage/v1/*        → cache-first (doctor photos, product images)
 //   SUPABASE public REST tables   → network-first, cached copy when offline
 //   esm.sh + Google Fonts         → stale-while-revalidate
@@ -65,12 +68,13 @@ async function networkFirst(req, cacheName) {
   }
 }
 
-async function staleWhileRevalidate(req, cacheName) {
+async function staleWhileRevalidate(req, cacheName, evt) {
   const cache = await caches.open(cacheName);
   const hit = await cache.match(req);
   const refresh = fetch(req)
     .then((res) => { if (res.ok) cache.put(req, res.clone()); return res; })
     .catch((err) => { if (hit) return hit; throw err; }); // offline refresh must not surface as an unhandled rejection
+  if (hit) evt?.waitUntil(refresh.catch(() => {})); // keep the worker alive until the background refresh lands
   return hit || refresh;
 }
 
@@ -81,7 +85,7 @@ self.addEventListener('fetch', (e) => {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return;
 
   if (url.origin === self.location.origin) {
-    e.respondWith(cacheFirst(req, STATIC).catch(async (err) => {
+    e.respondWith(staleWhileRevalidate(req, STATIC, e).catch(async (err) => {
       if (req.mode === 'navigate') {
         const shell = await caches.match('./index.html');
         if (shell) return shell;
@@ -97,5 +101,5 @@ self.addEventListener('fetch', (e) => {
     return; // auth, functions, rpc, appointments, … → browser handles it
   }
 
-  if (SWR_ORIGINS.includes(url.origin)) e.respondWith(staleWhileRevalidate(req, DATA));
+  if (SWR_ORIGINS.includes(url.origin)) e.respondWith(staleWhileRevalidate(req, DATA, e));
 });
