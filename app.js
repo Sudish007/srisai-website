@@ -9,6 +9,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { t, getLang, setLang, initLang, onLangChange } from './i18n.js';
+import { tc } from './content-i18n.js';
 import * as ui from './ui.js';
 
 const { $, esc, inr } = ui;
@@ -293,7 +294,7 @@ function renderChrome() {
   document.querySelector('meta[name="description"]')?.setAttribute('content', `${name} — ${t('app.description')}`);
   $('brandName').textContent = name;
   $('footName').textContent = name;
-  $('footTagline').textContent = s?.tagline ?? '';
+  $('footTagline').textContent = tc(s?.tagline ?? '');
   $('footRights').textContent = t('footer.rights', { year: new Date().getFullYear(), name });
   if (s) {
     const tel = telHref(s.phone);
@@ -336,11 +337,11 @@ function renderTicker() {
 function renderHero() {
   const s = state.settings;
   if (!s) return;
-  $('recognition').textContent = s.recognition ?? '';
-  $('tagline').textContent = s.tagline ?? '';
-  $('subTagline').textContent = s.sub_tagline ?? '';
-  $('patientsNote').textContent = s.patients_note ?? '';
-  $('badges').innerHTML = (Array.isArray(s.badges) ? s.badges : []).map((b) => `<span>${esc(b)}</span>`).join('');
+  $('recognition').textContent = tc(s.recognition ?? '');
+  $('tagline').textContent = tc(s.tagline ?? '');
+  $('subTagline').textContent = tc(s.sub_tagline ?? '');
+  $('patientsNote').textContent = tc(s.patients_note ?? '');
+  $('badges').innerHTML = (Array.isArray(s.badges) ? s.badges : []).map((b) => `<span>${esc(tc(b))}</span>`).join('');
 }
 
 // --- banner carousel: scroll-snap track, dots, 5s auto-advance paused on hover/touch/hidden tab
@@ -383,7 +384,7 @@ function renderBanners() {
         : '';
     return `<article class="car-slide" data-idx="${i}" style="background:linear-gradient(135deg,${from},${to})">
       <div class="car-media">${b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy">` : `<span aria-hidden="true">${esc(b.emoji || '🌿')}</span>`}</div>
-      <div class="car-text"><h3>${esc(b.title)}</h3><p>${esc(b.subtitle ?? '')}</p>${cta}</div>
+      <div class="car-text"><h3>${esc(tc(b.title))}</h3><p>${esc(tc(b.subtitle ?? ''))}</p>${cta}</div>
     </article>`;
   }).join('');
   $('carDots').innerHTML = list.length > 1
@@ -426,7 +427,7 @@ function renderStats() {
   sec.hidden = stats.length === 0;
   if (!stats.length) return;
   $('stats').innerHTML = stats.map((x) =>
-    `<div class="card tile stat"><b data-target="${esc(x.value)}">${statsAnimated ? esc(x.value) : '0'}</b><span>${esc(x.label)}</span></div>`).join('');
+    `<div class="card tile stat"><b data-target="${esc(x.value)}">${statsAnimated ? esc(x.value) : '0'}</b><span>${esc(tc(x.label))}</span></div>`).join('');
   if (statsAnimated) return;
   const obs = new IntersectionObserver((entries) => {
     if (!entries.some((e) => e.isIntersecting) || statsAnimated) return;
@@ -456,12 +457,12 @@ function renderDoctors() {
         <div class="avatar">${d.image_url ? `<img src="${esc(d.image_url)}" alt="${esc(t('a11y.doctorPhoto'))}" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</div>
         <div style="min-width:0">
           <h3>${esc(d.name)}</h3>
-          <div class="dspec">${esc(d.specialty ?? '')}</div>
-          <div class="dqual">${esc(d.qualifications ?? '')}</div>
+          <div class="dspec">${esc(tc(d.specialty ?? ''))}</div>
+          <div class="dqual">${esc(tc(d.qualifications ?? ''))}</div>
         </div>
       </div>
-      ${tags.length ? `<div class="tags">${tags.map((e) => `<span>${esc(e)}</span>`).join('')}</div>` : ''}
-      ${d.bio ? `<div><p class="bio ${open ? 'open' : ''}" data-bio>${esc(d.bio)}</p><button type="button" class="btn btn-link sm" data-more aria-expanded="${open}">${esc(t(open ? 'common.readLess' : 'common.readMore'))}</button></div>` : ''}
+      ${tags.length ? `<div class="tags">${tags.map((e) => `<span>${esc(tc(e))}</span>`).join('')}</div>` : ''}
+      ${d.bio ? `<div><p class="bio ${open ? 'open' : ''}" data-bio>${esc(tc(d.bio))}</p><button type="button" class="btn btn-link sm" data-more aria-expanded="${open}">${esc(t(open ? 'common.readLess' : 'common.readMore'))}</button></div>` : ''}
       <div class="btn-row">
         <a class="btn btn-teal sm" href="#book?doctor=${id}"><span class="ico" aria-hidden="true">📅</span><span class="lbl">${esc(t('home.bookWith'))}</span></a>
         <a class="btn btn-gold sm" href="#token?doctor=${id}"><span class="ico" aria-hidden="true">🎫</span><span class="lbl">${esc(t('home.tokenWith'))}</span></a>
@@ -491,8 +492,8 @@ function renderServices() {
   grid.innerHTML = list.map((s) => `
     <article class="card lift scard">
       <span class="ico" aria-hidden="true">${esc(s.emoji || '🩺')}</span>
-      <h3>${esc(s.name)}</h3>
-      <p>${esc(s.description ?? '')}</p>
+      <h3>${esc(tc(s.name))}</h3>
+      <p>${esc(tc(s.description ?? ''))}</p>
     </article>`).join('');
 }
 
@@ -502,7 +503,7 @@ function renderContact() {
   if (!s) return;
   const tiles = [];
   if (s.address) {
-    tiles.push(`<div class="card tile span-3"><span class="ico" aria-hidden="true">📍</span><span class="lbl">${esc(t('home.address'))}</span><span class="val">${esc(s.address)}</span>
+    tiles.push(`<div class="card tile span-3"><span class="ico" aria-hidden="true">📍</span><span class="lbl">${esc(t('home.address'))}</span><span class="val">${esc(tc(s.address))}</span>
       <a class="btn btn-ghost sm" href="https://maps.google.com/?q=${encodeURIComponent(s.address)}" target="_blank" rel="noopener"><span class="ico" aria-hidden="true">🗺️</span><span class="lbl">${esc(t('home.directions'))}</span></a></div>`);
   }
   if (s.phone) {
@@ -663,7 +664,7 @@ export function renderPharmacy() {
   const mk = (id, label, emoji) =>
     `<button type="button" class="chip ${state.activeCat === id ? 'on' : ''}" aria-pressed="${state.activeCat === id}" data-cat="${esc(id ?? '')}">${emoji ? `<span aria-hidden="true">${esc(emoji)}</span>` : ''}${esc(label)}</button>`;
   const cats = [...state.categories].sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0));
-  $('cats').innerHTML = mk(null, t('shop.all'), '') + cats.map((c) => mk(String(c.id), c.name, c.emoji)).join('');
+  $('cats').innerHTML = mk(null, t('shop.all'), '') + cats.map((c) => mk(String(c.id), tc(c.name), c.emoji)).join('');
   $('cats').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
     state.activeCat = b.dataset.cat || null;
     renderPharmacy();
@@ -1251,7 +1252,7 @@ function doctorRadiosHtml(group, selectedId, errKey) {
     return `<label class="card dradio ${on ? 'on' : ''}">
       <input type="radio" name="${group}" value="${esc(d.id)}" ${on ? 'checked' : ''}>
       <span class="avatar sm" aria-hidden="true">${d.image_url ? `<img src="${esc(d.image_url)}" alt="" loading="lazy">` : esc(d.emoji || '🧑‍⚕️')}</span>
-      <span class="dtxt"><b>${esc(d.name)}</b><small>${esc(d.specialty ?? '')}</small></span>
+      <span class="dtxt"><b>${esc(d.name)}</b><small>${esc(tc(d.specialty ?? ''))}</small></span>
       <span class="pcheck" aria-hidden="true"></span>
     </label>`;
   }).join('')}</div>
@@ -1364,7 +1365,7 @@ function renderBookForm() {
       <div class="blbl">${esc(t('book.chooseDoctor'))}</div>
       ${doctorRadiosHtml('bdoc', bk.doctorId, e.doctor)}
       <div class="blbl">${esc(t('book.service'))}</div>
-      <div class="chips">${services.map((s) => chip(s, s === svc, `data-svc="${esc(s)}"`)).join('')}</div>
+      <div class="chips">${services.map((s) => chip(tc(s), s === svc, `data-svc="${esc(s)}"`)).join('')}</div>
     </div>
     ${step(2, 'book.step2')}
     <div class="bsec">
@@ -1538,7 +1539,7 @@ function renderMyAppts() {
       <div class="adate" aria-hidden="true"><b>${esc(fmtDay(a.date, false))}</b><small>${esc(a.time ?? '')}</small></div>
       <div class="abody">
         <div class="ahead"><b>${esc(a.doctorName ?? '')}</b><span class="pill pill-${esc(st)}">${esc(t(`book.status.${st}`))}</span></div>
-        <div class="ameta">${esc(a.service ?? '')} · ${esc(t(a.type === 'online' ? 'book.online' : 'book.inPerson'))} · ${esc(inr(a.fee ?? 0))}</div>
+        <div class="ameta">${esc(tc(a.service ?? ''))} · ${esc(t(a.type === 'online' ? 'book.online' : 'book.inPerson'))} · ${esc(inr(a.fee ?? 0))}</div>
         <div class="ameta muted">${esc(fmtDay(a.date))}${a.time ? ` · ${esc(a.time)}` : ''}</div>
         ${canCancelAppt ? `<div class="oactions"><button type="button" class="btn btn-ghost danger sm" data-cancel-appt><span class="ico" aria-hidden="true">✕</span><span class="lbl">${esc(t('book.cancel'))}</span></button></div>` : ''}
       </div>
